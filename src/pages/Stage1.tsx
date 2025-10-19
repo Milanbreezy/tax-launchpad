@@ -28,9 +28,9 @@ const HEADER_SYNONYMS: Record<string, string[]> = {
   "payroll year": ["payroll year", "payrollyear", "payroll_year", "year"],
   "year of payment": ["year of payment", "yearofpayment", "year_of_payment", "payment year"],
   "last event": ["last event", "lastevent", "last_event", "event"],
-  "debit no": ["debit no", "debit number", "debitno", "debit_no", "debit no.", "debit_number"],
-  "debit amount": ["debit amount", "debitamount", "debit_amount", "debit"],
-  "credit amount": ["credit amount", "creditamount", "credit_amount", "credit"],
+  "debit no": ["debit no", "debit number", "debitno", "debit_no", "debit no.", "debit_number", "debit ref", "debit reference"],
+  "debit amount": ["debit amount", "debitamount", "debit_amount", "debit amt", "dr amount", "dr amt"],
+  "credit amount": ["credit amount", "creditamount", "credit_amount", "credit amt", "cr amount", "cr amt"],
   "period": ["period", "tax period", "taxperiod"]
 };
 
@@ -53,12 +53,28 @@ const findMatchingColumn = (header: string, requiredColumn: string): boolean => 
   const normalized = normalizeColumnName(header);
   const requiredNormalized = normalizeColumnName(requiredColumn);
   
-  // Check exact match
+  // Exact match first
   if (normalized === requiredNormalized) return true;
   
-  // Check synonyms
+  // Strict handling for amount columns to avoid matching "debit no"
+  if (requiredNormalized === "debit amount") {
+    const hasDebit = /\bdebit\b|\bdr\b/.test(normalized);
+    const hasAmount = /\bamount\b|\bamt\b/.test(normalized);
+    if (hasDebit && hasAmount) return true;
+  }
+  if (requiredNormalized === "credit amount") {
+    const hasCredit = /\bcredit\b|\bcr\b/.test(normalized);
+    const hasAmount = /\bamount\b|\bamt\b/.test(normalized);
+    if (hasCredit && hasAmount) return true;
+  }
+  
+  // Fallback to synonyms with word-level inclusion
   const synonyms = HEADER_SYNONYMS[requiredNormalized] || [];
-  return synonyms.some(syn => normalized === syn || normalized.includes(syn) || syn.includes(normalized));
+  return synonyms.some(syn => {
+    if (normalized === syn) return true;
+    const synWords = syn.split(" ").filter(Boolean);
+    return synWords.every(w => normalized.includes(w));
+  });
 };
 
 // Find column index with flexible matching
