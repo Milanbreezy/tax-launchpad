@@ -21,11 +21,54 @@ export default function Stage3() {
     const savedData = localStorage.getItem("stage_one_cleaned_data");
     if (savedData) {
       const parsed = JSON.parse(savedData);
-      setData(parsed);
+      const rearranged = rearrangeColumns(parsed);
+      setData(rearranged);
     } else {
       setError("No data found from previous stages. Please complete Stage 1 and Stage 2 first.");
     }
   }, []);
+
+  const rearrangeColumns = (inputData: any[]): any[] => {
+    if (inputData.length === 0) return inputData;
+
+    const headers = inputData[0];
+    const DESIRED_ORDER = [
+      "Value Date",
+      "Period", 
+      "Year of Payment",
+      "Payroll Year",
+      "Tax Type",
+      "Case Type",
+      "Debit No",
+      "Debit Amount",
+      "Credit Amount",
+      "Arrears",
+      "Last Event"
+    ];
+
+    // Map current indices to desired columns
+    const columnMapping: number[] = [];
+    DESIRED_ORDER.forEach(desiredCol => {
+      const idx = headers.findIndex((h: string) => 
+        h && h.toLowerCase().trim() === desiredCol.toLowerCase().trim()
+      );
+      if (idx !== -1) {
+        columnMapping.push(idx);
+      }
+    });
+
+    // If mapping failed, return original data
+    if (columnMapping.length !== DESIRED_ORDER.length) {
+      console.warn("Column rearrangement skipped: not all columns found");
+      return inputData;
+    }
+
+    // Rearrange all rows
+    return inputData.map(row => {
+      if (!Array.isArray(row)) return row;
+      return columnMapping.map(idx => row[idx]);
+    });
+  };
 
   const findColumnIndex = (columnName: string): number => {
     if (data.length === 0) return -1;
@@ -137,12 +180,6 @@ export default function Stage3() {
     const creditIndex = findColumnIndex("Credit Amount");
     const arrearsIndex = findColumnIndex("Arrears");
 
-    // Validation and debugging
-    console.log("Headers:", headers);
-    console.log("Debit Amount Index:", debitIndex, "->", headers[debitIndex]);
-    console.log("Credit Amount Index:", creditIndex, "->", headers[creditIndex]);
-    console.log("Arrears Index:", arrearsIndex, "->", headers[arrearsIndex]);
-
     if (debitIndex === -1 || creditIndex === -1) {
       toast({ 
         title: "Columns Not Found", 
@@ -165,6 +202,9 @@ export default function Stage3() {
 
     const newData = [...data];
     let groupsProcessed = 0;
+    let grandTotalDebit = 0;
+    let grandTotalCredit = 0;
+    let grandTotalArrears = 0;
     
     let groupStartIndex = 1; // Skip header
     
@@ -208,6 +248,11 @@ export default function Stage3() {
             newData[i][arrearsIndex] = arrears;
           }
           
+          // Add to grand totals
+          grandTotalDebit += totalDebit;
+          grandTotalCredit += totalCredit;
+          grandTotalArrears += arrears;
+          
           groupsProcessed++;
           
           // Skip the second empty row
@@ -219,6 +264,23 @@ export default function Stage3() {
       }
     }
 
+    // Add GRAND TOTALS at the bottom
+    const emptyRow = new Array(headers.length).fill("");
+    const grandTotalRow = [...emptyRow];
+    grandTotalRow[debitIndex] = grandTotalDebit;
+    grandTotalRow[creditIndex] = grandTotalCredit;
+    if (arrearsIndex !== -1) {
+      grandTotalRow[arrearsIndex] = grandTotalArrears;
+    }
+    // Mark it as grand total (put label in first column or Tax Type column)
+    const taxTypeIndex = findColumnIndex("Tax Type");
+    if (taxTypeIndex !== -1) {
+      grandTotalRow[taxTypeIndex] = "GRAND TOTAL";
+    }
+    
+    newData.push([...emptyRow]); // Empty row before grand total
+    newData.push(grandTotalRow); // Grand total row
+
     setData(newData);
     setTotalsCalculated(true);
     
@@ -227,7 +289,7 @@ export default function Stage3() {
     
     toast({ 
       title: "✅ Totals & Arrears Calculated", 
-      description: `Successfully calculated totals for ${groupsProcessed} groups` 
+      description: `Calculated ${groupsProcessed} group totals + grand totals` 
     });
   };
 
@@ -377,15 +439,19 @@ export default function Stage3() {
                     )}
                   </thead>
                   <tbody>
-                    {data.slice(1).map((row: any, i: number) => {
+                     {data.slice(1).map((row: any, i: number) => {
                       const isEmpty = isEmptyRow(row);
                       const isFirstEmpty = isEmpty && i + 1 < data.length - 1 && isEmptyRow(data[i + 2]);
+                      const taxTypeIndex = findColumnIndex("Tax Type");
+                      const isGrandTotal = taxTypeIndex !== -1 && row[taxTypeIndex] === "GRAND TOTAL";
                       
                       return (
                         <tr 
                           key={i} 
                           className={`border-b border-border transition-colors ${
-                            isEmpty && totalsCalculated && isFirstEmpty
+                            isGrandTotal
+                              ? "bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 font-bold text-lg"
+                              : isEmpty && totalsCalculated && isFirstEmpty
                               ? "bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 font-semibold" 
                               : isEmpty
                               ? "bg-muted/30"
@@ -395,9 +461,9 @@ export default function Stage3() {
                           {Array.isArray(row) && row.map((cell: any, j: number) => (
                             <td 
                               key={j} 
-                              className="p-2 border border-border whitespace-nowrap"
+                              className={`p-2 border border-border whitespace-nowrap ${isGrandTotal ? 'font-bold' : ''}`}
                             >
-                              {typeof cell === 'number' && !isEmpty ? cell.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : cell}
+                              {typeof cell === 'number' ? cell.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : cell}
                             </td>
                           ))}
                         </tr>
