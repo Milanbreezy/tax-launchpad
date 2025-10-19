@@ -49,21 +49,71 @@ export default function Stage4() {
     loadData();
   }, []);
 
+  const rearrangeColumns = (dataArray: any[]): any[] => {
+    if (dataArray.length === 0) return dataArray;
+    
+    const headers = dataArray[0];
+    const desiredOrder = [
+      'Value Date',
+      'Period', 
+      'Year of Payment',
+      'PayrollYear',
+      'Tax Type',
+      'Case Type',
+      'Debit No',
+      'Debit Amount',
+      'Credit Amount',
+      'Arrears',
+      'Last Event'
+    ];
+    
+    // Create a map of current column indices
+    const columnMap = new Map<string, number>();
+    headers.forEach((header: string, index: number) => {
+      if (header) {
+        columnMap.set(header.trim(), index);
+      }
+    });
+    
+    // Create new column order based on desired sequence
+    const newColumnIndices: number[] = [];
+    desiredOrder.forEach(colName => {
+      const idx = columnMap.get(colName);
+      if (idx !== undefined) {
+        newColumnIndices.push(idx);
+      }
+    });
+    
+    // Rearrange all rows
+    const rearrangedData = dataArray.map(row => {
+      return newColumnIndices.map(idx => row[idx]);
+    });
+    
+    return rearrangedData;
+  };
+
   const loadData = () => {
     const savedData = localStorage.getItem("stage_one_cleaned_data");
     if (savedData) {
       const parsed = JSON.parse(savedData);
-      setData(parsed);
-      setOriginalData(JSON.parse(JSON.stringify(parsed))); // Deep copy
+      
+      // Rearrange columns to match desired order
+      const rearranged = rearrangeColumns(parsed);
+      
+      setData(rearranged);
+      setOriginalData(JSON.parse(JSON.stringify(rearranged))); // Deep copy
       
       // Calculate initial statistics
-      const initialStats = calculateInitialStatistics(parsed);
+      const initialStats = calculateInitialStatistics(rearranged);
       setTotalRows(initialStats.totalRows);
       setRemainingRows(initialStats.totalRows);
       setTotalArrears(initialStats.totalArrears);
       
-      analyzeTaxTypes(parsed);
-      analyzeCaseTypes(parsed);
+      analyzeTaxTypes(rearranged);
+      analyzeCaseTypes(rearranged);
+      
+      // Save rearranged data back to localStorage
+      localStorage.setItem("stage_one_cleaned_data", JSON.stringify(rearranged));
     } else {
       setError("No data found. Please complete previous stages first.");
     }
