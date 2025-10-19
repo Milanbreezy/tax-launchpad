@@ -132,14 +132,32 @@ export default function Stage3() {
       return;
     }
 
+    const headers = data[0];
     const debitIndex = findColumnIndex("Debit Amount");
     const creditIndex = findColumnIndex("Credit Amount");
     const arrearsIndex = findColumnIndex("Arrears");
+
+    // Validation and debugging
+    console.log("Headers:", headers);
+    console.log("Debit Amount Index:", debitIndex, "->", headers[debitIndex]);
+    console.log("Credit Amount Index:", creditIndex, "->", headers[creditIndex]);
+    console.log("Arrears Index:", arrearsIndex, "->", headers[arrearsIndex]);
 
     if (debitIndex === -1 || creditIndex === -1) {
       toast({ 
         title: "Columns Not Found", 
         description: "Debit Amount or Credit Amount column missing", 
+        variant: "destructive" 
+      });
+      return;
+    }
+
+    // Ensure we're not using Debit No column by mistake
+    const debitNoIndex = findColumnIndex("Debit No");
+    if (debitIndex === debitNoIndex) {
+      toast({ 
+        title: "⚠️ Column Error", 
+        description: "Debit Amount column incorrectly mapped. Please reimport data from Stage 1.", 
         variant: "destructive" 
       });
       return;
@@ -164,8 +182,18 @@ export default function Stage3() {
           for (let j = groupStartIndex; j < i; j++) {
             const row = newData[j];
             if (!isEmptyRow(row)) {
-              const debit = parseFloat(row[debitIndex]) || 0;
-              const credit = parseFloat(row[creditIndex]) || 0;
+              // Parse numeric values, handling various formats
+              const debitValue = row[debitIndex];
+              const creditValue = row[creditIndex];
+              
+              // Convert to number, handling strings with commas
+              const debit = typeof debitValue === 'string' 
+                ? parseFloat(debitValue.replace(/,/g, '')) || 0
+                : parseFloat(debitValue) || 0;
+              const credit = typeof creditValue === 'string'
+                ? parseFloat(creditValue.replace(/,/g, '')) || 0
+                : parseFloat(creditValue) || 0;
+              
               totalDebit += debit;
               totalCredit += credit;
             }
