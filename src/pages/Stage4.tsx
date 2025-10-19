@@ -55,7 +55,13 @@ export default function Stage4() {
       const parsed = JSON.parse(savedData);
       setData(parsed);
       setOriginalData(JSON.parse(JSON.stringify(parsed))); // Deep copy
-      calculateStatistics(parsed);
+      
+      // Calculate initial statistics
+      const initialStats = calculateInitialStatistics(parsed);
+      setTotalRows(initialStats.totalRows);
+      setRemainingRows(initialStats.totalRows);
+      setTotalArrears(initialStats.totalArrears);
+      
       analyzeTaxTypes(parsed);
       analyzeCaseTypes(parsed);
     } else {
@@ -81,8 +87,8 @@ export default function Stage4() {
     return row[taxTypeIndex]?.toString().toUpperCase().includes("TOTAL");
   };
 
-  const calculateStatistics = (dataArray: any[]) => {
-    if (dataArray.length === 0) return;
+  const calculateInitialStatistics = (dataArray: any[]) => {
+    if (dataArray.length === 0) return { totalRows: 0, totalArrears: 0 };
     
     const arrearsIndex = findColumnIndex("Arrears");
     let rows = 0;
@@ -99,9 +105,28 @@ export default function Stage4() {
       }
     }
     
-    setTotalRows(rows);
-    setRemainingRows(rows);
-    setTotalArrears(arrears);
+    return { totalRows: rows, totalArrears: arrears };
+  };
+
+  const calculateRemainingStatistics = (dataArray: any[]) => {
+    if (dataArray.length === 0) return { remainingRows: 0, totalArrears: 0 };
+    
+    const arrearsIndex = findColumnIndex("Arrears");
+    let rows = 0;
+    let arrears = 0;
+    
+    for (let i = 1; i < dataArray.length; i++) {
+      const row = dataArray[i];
+      if (!isEmptyRow(row) && !isTotalRow(row)) {
+        rows++;
+        if (arrearsIndex !== -1) {
+          const value = parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
+          arrears += value;
+        }
+      }
+    }
+    
+    return { remainingRows: rows, totalArrears: arrears };
   };
 
   const analyzeTaxTypes = (dataArray: any[]) => {
@@ -239,7 +264,11 @@ export default function Stage4() {
     setData(newData);
     setRemovedRowsCache(newRemovedCache);
     setRemovedCount(removedCount + removed);
-    calculateStatistics(newData);
+    
+    // Recalculate remaining statistics
+    const stats = calculateRemainingStatistics(newData);
+    setRemainingRows(stats.remainingRows);
+    setTotalArrears(stats.totalArrears);
     
     // Save to localStorage
     localStorage.setItem("stage_one_cleaned_data", JSON.stringify(newData));
@@ -254,7 +283,12 @@ export default function Stage4() {
     setData(JSON.parse(JSON.stringify(originalData)));
     setRemovedRowsCache(new Set());
     setRemovedCount(0);
-    calculateStatistics(originalData);
+    
+    // Recalculate statistics from original data
+    const stats = calculateInitialStatistics(originalData);
+    setRemainingRows(stats.totalRows);
+    setTotalArrears(stats.totalArrears);
+    
     analyzeTaxTypes(originalData);
     analyzeCaseTypes(originalData);
     
@@ -307,7 +341,13 @@ export default function Stage4() {
     }
     
     setData(newData);
-    calculateStatistics(newData);
+    setRemovedCount(removedCount + removed);
+    
+    // Recalculate remaining statistics
+    const stats = calculateRemainingStatistics(newData);
+    setRemainingRows(stats.remainingRows);
+    setTotalArrears(stats.totalArrears);
+    
     localStorage.setItem("stage_one_cleaned_data", JSON.stringify(newData));
     
     toast({ 
@@ -345,7 +385,13 @@ export default function Stage4() {
     }
     
     setData(newData);
-    calculateStatistics(newData);
+    setRemovedCount(removedCount + removed);
+    
+    // Recalculate remaining statistics
+    const stats = calculateRemainingStatistics(newData);
+    setRemainingRows(stats.remainingRows);
+    setTotalArrears(stats.totalArrears);
+    
     localStorage.setItem("stage_one_cleaned_data", JSON.stringify(newData));
     
     toast({ 
