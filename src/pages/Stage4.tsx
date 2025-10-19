@@ -284,22 +284,19 @@ export default function Stage4() {
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       
-      // Skip empty rows and total rows
+      // Always preserve empty rows and total rows (structural elements)
       if (isEmptyRow(row) || isTotalRow(row)) {
         newData.push(row);
         continue;
       }
       
+      // Parse numeric values
       const arrears = parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
       const debit = parseFloat(String(row[debitIndex] || 0).replace(/,/g, "")) || 0;
       const credit = parseFloat(String(row[creditIndex] || 0).replace(/,/g, "")) || 0;
       
-      // Zero Arrears Definition:
-      // 1. Arrears = 0 AND DebitAmount = CreditAmount AND Both > 0
-      // 2. Arrears = 0 AND (DebitAmount = 0 OR CreditAmount = 0)
-      const isZeroArrears = 
-        (arrears === 0 && debit === credit && debit > 0 && credit > 0) ||
-        (arrears === 0 && (debit === 0 || credit === 0));
+      // ONLY remove rows where ALL THREE are zero: Debit = 0 AND Credit = 0 AND Arrears = 0
+      const isZeroArrears = (debit === 0 && credit === 0 && arrears === 0);
       
       if (isZeroArrears) {
         // Create unique ID for this row
@@ -307,6 +304,7 @@ export default function Stage4() {
         newRemovedCache.add(rowId);
         removed++;
       } else {
+        // Keep all other rows (including rows with text data, partial zeros, or any non-zero values)
         newData.push(row);
       }
     }
@@ -324,8 +322,9 @@ export default function Stage4() {
     localStorage.setItem("stage_one_cleaned_data", JSON.stringify(newData));
     
     toast({ 
-      title: "✅ Zero Arrears Removed", 
-      description: `Removed ${removed} rows with zero arrears` 
+      title: "✅ Zero Arrear Entries Removed", 
+      description: `Successfully removed ${removed} zero entries — all other data preserved`,
+      duration: 4000
     });
   };
 
@@ -617,9 +616,11 @@ export default function Stage4() {
             <AlertDescription>
               <strong>Definition:</strong> Zero arrears entries are those where:
               <ul className="list-disc list-inside mt-2 space-y-1">
-                <li>Arrears = 0 AND Debit Amount = Credit Amount (both &gt; 0)</li>
-                <li>Arrears = 0 AND (Debit Amount = 0 OR Credit Amount = 0)</li>
+                <li><strong>Debit Amount = 0 AND Credit Amount = 0 AND Arrears = 0</strong></li>
               </ul>
+              <p className="mt-2 text-xs text-muted-foreground">
+                All other rows (including text data, partial zeros, or any non-zero values) will be preserved.
+              </p>
             </AlertDescription>
           </Alert>
           
