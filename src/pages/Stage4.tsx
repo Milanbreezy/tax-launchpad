@@ -92,6 +92,41 @@ export default function Stage4() {
     return rearrangedData;
   };
 
+  const recalculateArrears = (dataArray: any[]): any[] => {
+    if (dataArray.length === 0) return dataArray;
+    
+    const debitIndex = findColumnIndex("Debit Amount");
+    const creditIndex = findColumnIndex("Credit Amount");
+    const arrearsIndex = findColumnIndex("Arrears");
+    
+    if (debitIndex === -1 || creditIndex === -1 || arrearsIndex === -1) {
+      return dataArray;
+    }
+    
+    const recalculatedData = dataArray.map((row, idx) => {
+      // Skip header row
+      if (idx === 0) return row;
+      
+      // Skip empty rows and total rows
+      if (isEmptyRow(row) || isTotalRow(row)) return row;
+      
+      // Parse numeric values
+      const debit = parseFloat(String(row[debitIndex] || 0).replace(/,/g, "")) || 0;
+      const credit = parseFloat(String(row[creditIndex] || 0).replace(/,/g, "")) || 0;
+      
+      // Calculate arrears: Debit - Credit
+      const calculatedArrears = debit - credit;
+      
+      // Update the arrears column
+      const newRow = [...row];
+      newRow[arrearsIndex] = calculatedArrears;
+      
+      return newRow;
+    });
+    
+    return recalculatedData;
+  };
+
   const loadData = () => {
     const savedData = localStorage.getItem("stage_one_cleaned_data");
     if (savedData) {
@@ -100,20 +135,29 @@ export default function Stage4() {
       // Rearrange columns to match desired order
       const rearranged = rearrangeColumns(parsed);
       
-      setData(rearranged);
-      setOriginalData(JSON.parse(JSON.stringify(rearranged))); // Deep copy
+      // Recalculate arrears for all rows
+      const withRecalculatedArrears = recalculateArrears(rearranged);
+      
+      setData(withRecalculatedArrears);
+      setOriginalData(JSON.parse(JSON.stringify(withRecalculatedArrears))); // Deep copy
       
       // Calculate initial statistics
-      const initialStats = calculateInitialStatistics(rearranged);
+      const initialStats = calculateInitialStatistics(withRecalculatedArrears);
       setTotalRows(initialStats.totalRows);
       setRemainingRows(initialStats.totalRows);
       setTotalArrears(initialStats.totalArrears);
       
-      analyzeTaxTypes(rearranged);
-      analyzeCaseTypes(rearranged);
+      analyzeTaxTypes(withRecalculatedArrears);
+      analyzeCaseTypes(withRecalculatedArrears);
       
-      // Save rearranged data back to localStorage
-      localStorage.setItem("stage_one_cleaned_data", JSON.stringify(rearranged));
+      // Save recalculated data back to localStorage
+      localStorage.setItem("stage_one_cleaned_data", JSON.stringify(withRecalculatedArrears));
+      
+      toast({
+        title: "✅ Data Loaded",
+        description: "Arrears automatically recalculated for all entries",
+        duration: 3000
+      });
     } else {
       setError("No data found. Please complete previous stages first.");
     }
@@ -263,6 +307,9 @@ export default function Stage4() {
       return;
     }
 
+    // First, recalculate arrears to ensure accuracy
+    const recalculatedData = recalculateArrears(data);
+
     const arrearsIndex = findColumnIndex("Arrears");
     const debitIndex = findColumnIndex("Debit Amount");
     const creditIndex = findColumnIndex("Credit Amount");
@@ -276,13 +323,13 @@ export default function Stage4() {
       return;
     }
 
-    const headers = data[0];
+    const headers = recalculatedData[0];
     const newData = [headers];
     const newRemovedCache = new Set(removedRowsCache);
     let removed = 0;
     
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
+    for (let i = 1; i < recalculatedData.length; i++) {
+      const row = recalculatedData[i];
       
       // Always preserve empty rows and total rows (structural elements)
       if (isEmptyRow(row) || isTotalRow(row)) {
@@ -290,7 +337,7 @@ export default function Stage4() {
         continue;
       }
       
-      // Parse numeric values
+      // Parse numeric values (use recalculated arrears)
       const arrears = parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
       const debit = parseFloat(String(row[debitIndex] || 0).replace(/,/g, "")) || 0;
       const credit = parseFloat(String(row[creditIndex] || 0).replace(/,/g, "")) || 0;
@@ -323,29 +370,33 @@ export default function Stage4() {
     
     toast({ 
       title: "✅ Zero Arrear Entries Removed", 
-      description: `Successfully removed ${removed} zero entries — all other data preserved`,
+      description: `Successfully removed ${removed} zero entries — all other data preserved. Arrears recalculated.`,
       duration: 4000
     });
   };
 
   const handleRestoreRemoved = () => {
-    setData(JSON.parse(JSON.stringify(originalData)));
+    // Recalculate arrears when restoring
+    const recalculatedOriginal = recalculateArrears(originalData);
+    
+    setData(JSON.parse(JSON.stringify(recalculatedOriginal)));
+    setOriginalData(recalculatedOriginal);
     setRemovedRowsCache(new Set());
     setRemovedCount(0);
     
     // Recalculate statistics from original data
-    const stats = calculateInitialStatistics(originalData);
+    const stats = calculateInitialStatistics(recalculatedOriginal);
     setRemainingRows(stats.totalRows);
     setTotalArrears(stats.totalArrears);
     
-    analyzeTaxTypes(originalData);
-    analyzeCaseTypes(originalData);
+    analyzeTaxTypes(recalculatedOriginal);
+    analyzeCaseTypes(recalculatedOriginal);
     
-    localStorage.setItem("stage_one_cleaned_data", JSON.stringify(originalData));
+    localStorage.setItem("stage_one_cleaned_data", JSON.stringify(recalculatedOriginal));
     
     toast({ 
       title: "🔁 Data Restored", 
-      description: "All removed rows have been restored" 
+      description: "All removed rows restored — arrears recalculated" 
     });
   };
 
@@ -364,16 +415,19 @@ export default function Stage4() {
   const applyTaxTypeFilter = () => {
     if (data.length === 0) return;
     
+    // Recalculate arrears before filtering
+    const recalculatedData = recalculateArrears(data);
+    
     const taxTypeIndex = findColumnIndex("Tax Type");
     if (taxTypeIndex === -1) return;
     
     const selectedTaxTypes = new Set(taxTypes.filter(t => t.selected).map(t => t.taxType));
-    const headers = data[0];
+    const headers = recalculatedData[0];
     const newData = [headers];
     let removed = 0;
     
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
+    for (let i = 1; i < recalculatedData.length; i++) {
+      const row = recalculatedData[i];
       
       if (isEmptyRow(row) || isTotalRow(row)) {
         newData.push(row);
@@ -397,27 +451,33 @@ export default function Stage4() {
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
     
+    analyzeTaxTypes(newData);
+    analyzeCaseTypes(newData);
+    
     localStorage.setItem("stage_one_cleaned_data", JSON.stringify(newData));
     
     toast({ 
       title: "✅ Tax Type Filter Applied", 
-      description: `Removed ${removed} rows based on tax type selection` 
+      description: `Removed ${removed} rows — arrears recalculated` 
     });
   };
 
   const applyCaseTypeFilter = () => {
     if (data.length === 0) return;
     
+    // Recalculate arrears before filtering
+    const recalculatedData = recalculateArrears(data);
+    
     const caseTypeIndex = findColumnIndex("Case Type");
     if (caseTypeIndex === -1) return;
     
     const selectedCaseTypes = new Set(caseTypes.filter(c => c.selected).map(c => c.caseType));
-    const headers = data[0];
+    const headers = recalculatedData[0];
     const newData = [headers];
     let removed = 0;
     
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
+    for (let i = 1; i < recalculatedData.length; i++) {
+      const row = recalculatedData[i];
       
       if (isEmptyRow(row) || isTotalRow(row)) {
         newData.push(row);
@@ -441,11 +501,14 @@ export default function Stage4() {
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
     
+    analyzeTaxTypes(newData);
+    analyzeCaseTypes(newData);
+    
     localStorage.setItem("stage_one_cleaned_data", JSON.stringify(newData));
     
     toast({ 
       title: "✅ Case Type Filter Applied", 
-      description: `Removed ${removed} rows based on case type selection` 
+      description: `Removed ${removed} rows — arrears recalculated` 
     });
   };
 
@@ -509,8 +572,9 @@ export default function Stage4() {
                     key={rowIdx}
                     className={`
                       ${isEmpty ? "bg-muted/30" : ""}
-                      ${isTotal ? "bg-blue-50 dark:bg-blue-950/20 font-bold" : ""}
-                      ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 font-bold border-t-[3px] border-b-[3px]" : ""}
+                      ${isTotal && !isGrandTotal ? "bg-blue-50 dark:bg-blue-950/20" : ""}
+                      ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 border-t-[3px] border-b-[3px]" : ""}
+                      ${isTotal || isGrandTotal ? "font-bold" : ""}
                     `}
                     style={isGrandTotal ? { borderColor: 'black' } : {}}
                   >
@@ -519,12 +583,12 @@ export default function Stage4() {
                       const isNumeric = isNumericColumn(header);
                       let displayValue = cell || "";
                       
-                      // Format numeric columns with comma separators
-                      if (isNumeric && cell && !isEmpty) {
-                        const numValue = parseFloat(String(cell).replace(/,/g, ""));
+                      // Format numeric columns with comma separators - ALWAYS show zeros as 0.00
+                      if (isNumeric) {
+                        const numValue = parseFloat(String(cell || 0).replace(/,/g, ""));
                         if (!isNaN(numValue)) {
                           displayValue = formatCurrency(numValue);
-                        } else if (cell.toString() === "0" || cell.toString() === "") {
+                        } else {
                           displayValue = "0.00";
                         }
                       }
@@ -614,12 +678,14 @@ export default function Stage4() {
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              <strong>Definition:</strong> Zero arrears entries are those where:
-              <ul className="list-disc list-inside mt-2 space-y-1">
-                <li><strong>Debit Amount = 0 AND Credit Amount = 0 AND Arrears = 0</strong></li>
+              <strong>Universal Arrear Calculation:</strong> For all rows: <strong>Arrear = Debit Amount - Credit Amount</strong>
+              <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
+                <li>If Debit = Credit → Arrear = 0 (Balanced Entry)</li>
+                <li>If Debit &gt; Credit → Arrear = Positive (Outstanding Liability)</li>
+                <li>If Credit &gt; Debit → Arrear = Negative (Overpayment)</li>
               </ul>
               <p className="mt-2 text-xs text-muted-foreground">
-                All other rows (including text data, partial zeros, or any non-zero values) will be preserved.
+                <strong>Zero Arrears Removal:</strong> Only removes rows where <strong>Debit = 0 AND Credit = 0 AND Arrears = 0</strong>
               </p>
             </AlertDescription>
           </Alert>
