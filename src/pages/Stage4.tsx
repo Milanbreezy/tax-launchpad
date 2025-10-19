@@ -400,12 +400,19 @@ export default function Stage4() {
     });
   };
 
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-TZ', {
+  const formatCurrency = (value: number | string) => {
+    const numValue = typeof value === 'string' ? parseFloat(value.replace(/,/g, '')) : value;
+    if (isNaN(numValue)) return '0.00';
+    return new Intl.NumberFormat('en-US', {
       style: 'decimal',
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
-    }).format(value);
+    }).format(numValue);
+  };
+
+  const isNumericColumn = (columnName: string): boolean => {
+    const numericColumns = ['Debit Amount', 'Credit Amount', 'Arrears'];
+    return numericColumns.some(col => columnName.toLowerCase().includes(col.toLowerCase()));
   };
 
   const renderDataTable = () => {
@@ -413,15 +420,21 @@ export default function Stage4() {
     
     const headers = data[0];
     const arrearsIndex = findColumnIndex("Arrears");
+    const debitIndex = findColumnIndex("Debit Amount");
+    const creditIndex = findColumnIndex("Credit Amount");
     
     return (
       <ScrollArea className="h-[400px] rounded-border">
         <div className="relative overflow-auto">
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 bg-background z-10">
-              <tr>
+              <tr className="border-b-2 border-border">
                 {headers.map((header: string, idx: number) => (
-                  <th key={idx} className="border border-border p-2 text-left font-semibold bg-muted">
+                  <th 
+                    key={idx} 
+                    className="border-2 border-border p-3 text-left font-bold bg-muted whitespace-normal min-w-[120px]"
+                    style={{ borderColor: 'black' }}
+                  >
                     {header}
                   </th>
                 ))}
@@ -431,34 +444,62 @@ export default function Stage4() {
               {data.slice(1).map((row: any[], rowIdx: number) => {
                 const isEmpty = isEmptyRow(row);
                 const isTotal = isTotalRow(row);
-                const isGrandTotal = row[0]?.toString().includes("GRAND");
+                const isGrandTotal = row[0]?.toString().toUpperCase().includes("GRAND");
                 
                 // Color coding for arrears
                 let arrearsColor = "";
-                if (arrearsIndex !== -1 && !isEmpty && !isTotal) {
+                if (arrearsIndex !== -1 && !isEmpty && !isTotal && !isGrandTotal) {
                   const arrearsValue = parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
                   if (arrearsValue === 0) arrearsColor = "text-muted-foreground";
-                  else if (arrearsValue < 0) arrearsColor = "text-destructive";
-                  else if (arrearsValue > 0) arrearsColor = "text-success";
+                  else if (arrearsValue < 0) arrearsColor = "text-destructive font-semibold";
+                  else if (arrearsValue > 0) arrearsColor = "text-success font-semibold";
                 }
                 
                 return (
                   <tr 
                     key={rowIdx}
                     className={`
-                      ${isEmpty ? "bg-muted/30 border-t-2 border-dashed" : ""}
-                      ${isTotal ? "bg-blue-50 dark:bg-blue-950/20 font-semibold" : ""}
-                      ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 font-bold" : ""}
+                      ${isEmpty ? "bg-muted/30" : ""}
+                      ${isTotal ? "bg-blue-50 dark:bg-blue-950/20 font-bold" : ""}
+                      ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 font-bold border-t-[3px] border-b-[3px]" : ""}
                     `}
+                    style={isGrandTotal ? { borderColor: 'black' } : {}}
                   >
-                    {row.map((cell: any, cellIdx: number) => (
-                      <td 
-                        key={cellIdx} 
-                        className={`border border-border p-2 ${cellIdx === arrearsIndex ? arrearsColor : ""}`}
-                      >
-                        {cell || ""}
-                      </td>
-                    ))}
+                    {row.map((cell: any, cellIdx: number) => {
+                      const header = headers[cellIdx];
+                      const isNumeric = isNumericColumn(header);
+                      let displayValue = cell || "";
+                      
+                      // Format numeric columns with comma separators
+                      if (isNumeric && cell && !isEmpty) {
+                        const numValue = parseFloat(String(cell).replace(/,/g, ""));
+                        if (!isNaN(numValue)) {
+                          displayValue = formatCurrency(numValue);
+                        } else if (cell.toString() === "0" || cell.toString() === "") {
+                          displayValue = "0.00";
+                        }
+                      }
+                      
+                      // Apply special styling for zero values
+                      const cellValue = parseFloat(String(cell || 0).replace(/,/g, ""));
+                      const isZeroValue = isNumeric && cellValue === 0 && !isEmpty && !isTotal && !isGrandTotal;
+                      
+                      return (
+                        <td 
+                          key={cellIdx} 
+                          className={`
+                            border-2 p-2 whitespace-normal break-words
+                            ${cellIdx === arrearsIndex ? arrearsColor : ""}
+                            ${isTotal || isGrandTotal ? "font-bold" : ""}
+                            ${isZeroValue ? "text-muted-foreground" : ""}
+                            ${isNumeric ? "text-right tabular-nums" : ""}
+                          `}
+                          style={{ borderColor: 'hsl(var(--border))' }}
+                        >
+                          {displayValue}
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
               })}
