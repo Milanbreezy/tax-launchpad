@@ -558,9 +558,37 @@ export default function Stage4() {
                 const isTotal = isTotalRow(row);
                 const isGrandTotal = row[0]?.toString().toUpperCase().includes("GRAND");
                 
-                // Color coding for arrears
+                // Determine if this is a separator row (first or second)
+                // First separator row will have total values
+                // Second separator row should be completely empty
+                let isFirstSeparator = false;
+                let isSecondSeparator = false;
+                
+                if (isEmpty && !isTotal) {
+                  // Check if next row is also empty (this is first separator)
+                  // or if previous row is empty (this is second separator)
+                  const prevRow = rowIdx > 0 ? data[rowIdx] : null;
+                  const nextRow = rowIdx < data.length - 2 ? data[rowIdx + 2] : null;
+                  
+                  if (prevRow && isEmptyRow(prevRow)) {
+                    isSecondSeparator = true;
+                  } else if (nextRow && isEmptyRow(nextRow)) {
+                    isFirstSeparator = true;
+                  }
+                }
+                
+                // Check if row has totals (non-zero debit/credit/arrears in empty row)
+                const hasValues = isEmpty && (
+                  (debitIndex !== -1 && row[debitIndex]) ||
+                  (creditIndex !== -1 && row[creditIndex]) ||
+                  (arrearsIndex !== -1 && row[arrearsIndex])
+                );
+                
+                const isTotalRowWithValues = isEmpty && hasValues;
+                
+                // Color coding for arrears in total rows only
                 let arrearsColor = "";
-                if (arrearsIndex !== -1 && !isEmpty && !isTotal && !isGrandTotal) {
+                if (arrearsIndex !== -1 && isTotalRowWithValues) {
                   const arrearsValue = parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
                   if (arrearsValue === 0) arrearsColor = "text-muted-foreground";
                   else if (arrearsValue < 0) arrearsColor = "text-destructive font-semibold";
@@ -571,43 +599,57 @@ export default function Stage4() {
                   <tr 
                     key={rowIdx}
                     className={`
-                      ${isEmpty ? "bg-muted/30" : ""}
-                      ${isTotal && !isGrandTotal ? "bg-blue-50 dark:bg-blue-950/20" : ""}
-                      ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 border-t-[3px] border-b-[3px]" : ""}
-                      ${isTotal || isGrandTotal ? "font-bold" : ""}
+                      ${isEmpty && !isTotalRowWithValues ? "bg-muted/30" : ""}
+                      ${isTotal && !isGrandTotal ? "bg-blue-50 dark:bg-blue-950/20 font-bold" : ""}
+                      ${isTotalRowWithValues ? "bg-blue-50 dark:bg-blue-950/20 font-bold" : ""}
+                      ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 border-t-[3px] border-b-[3px] font-bold" : ""}
                     `}
-                    style={isGrandTotal ? { borderColor: 'black' } : {}}
+                    style={(isGrandTotal || isTotalRowWithValues) ? { borderColor: 'black' } : {}}
                   >
                     {row.map((cell: any, cellIdx: number) => {
                       const header = headers[cellIdx];
                       const isNumeric = isNumericColumn(header);
+                      const isArrearsCol = cellIdx === arrearsIndex;
                       let displayValue = cell || "";
                       
-                      // Format numeric columns with comma separators - ALWAYS show zeros as 0.00
-                      if (isNumeric) {
+                      // Second separator row: show nothing (completely empty)
+                      if (isSecondSeparator) {
+                        displayValue = "";
+                      }
+                      // Arrears column: only show in total rows, NOT in regular data rows
+                      else if (isArrearsCol && !isEmpty && !isTotal && !isGrandTotal) {
+                        displayValue = "";
+                      }
+                      // Format numeric columns with comma separators
+                      else if (isNumeric) {
                         const numValue = parseFloat(String(cell || 0).replace(/,/g, ""));
-                        if (!isNaN(numValue)) {
+                        if (!isNaN(numValue) && (isEmpty || isTotal || isGrandTotal)) {
+                          // Only format and show numbers in total/empty rows with values
                           displayValue = formatCurrency(numValue);
-                        } else {
-                          displayValue = "0.00";
+                        } else if (!isEmpty && !isTotal && !isGrandTotal && !isArrearsCol) {
+                          // For regular data rows, show Debit and Credit amounts
+                          if (!isNaN(numValue)) {
+                            displayValue = formatCurrency(numValue);
+                          } else {
+                            displayValue = "";
+                          }
+                        } else if (isEmpty && !hasValues) {
+                          // Empty separator rows with no values
+                          displayValue = "";
                         }
                       }
-                      
-                      // Apply special styling for zero values
-                      const cellValue = parseFloat(String(cell || 0).replace(/,/g, ""));
-                      const isZeroValue = isNumeric && cellValue === 0 && !isEmpty && !isTotal && !isGrandTotal;
                       
                       return (
                         <td 
                           key={cellIdx} 
                           className={`
                             border-2 p-2 whitespace-normal break-words
-                            ${cellIdx === arrearsIndex ? arrearsColor : ""}
-                            ${isTotal || isGrandTotal ? "font-bold" : ""}
-                            ${isZeroValue ? "text-muted-foreground" : ""}
-                            ${isNumeric ? "text-right tabular-nums" : ""}
+                            ${isArrearsCol && isTotalRowWithValues ? arrearsColor : ""}
+                            ${isTotal || isGrandTotal || isTotalRowWithValues ? "font-bold" : ""}
+                            ${isNumeric && !isArrearsCol ? "text-right tabular-nums" : ""}
+                            ${isArrearsCol && isTotalRowWithValues ? "text-right tabular-nums" : ""}
                           `}
-                          style={{ borderColor: 'hsl(var(--border))' }}
+                          style={{ borderColor: 'black' }}
                         >
                           {displayValue}
                         </td>
