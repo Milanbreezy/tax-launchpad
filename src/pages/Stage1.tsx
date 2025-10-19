@@ -399,7 +399,8 @@ export default function Stage1() {
       setError("Please clean columns first");
       return;
     }
-    // TODO: Save cleaned data to storage
+    // Save cleaned data to storage for next stage
+    localStorage.setItem("stage_one_cleaned_data", JSON.stringify(cleanedData));
     navigate("/stage-2");
   };
 
