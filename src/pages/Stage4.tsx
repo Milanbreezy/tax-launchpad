@@ -301,6 +301,40 @@ export default function Stage4() {
     setCaseTypes(caseTypesArray);
   };
 
+  // Helper function to calculate days difference between two dates
+  const daysDifference = (date1Str: string, date2Str: string): number => {
+    try {
+      const parseDate = (dateStr: string): Date | null => {
+        if (!dateStr) return null;
+        
+        // Try DD/MM/YYYY format
+        const ddmmyyyy = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (ddmmyyyy) {
+          return new Date(parseInt(ddmmyyyy[3]), parseInt(ddmmyyyy[2]) - 1, parseInt(ddmmyyyy[1]));
+        }
+        
+        // Try YYYY-MM-DD format
+        const yyyymmdd = dateStr.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (yyyymmdd) {
+          return new Date(parseInt(yyyymmdd[1]), parseInt(yyyymmdd[2]) - 1, parseInt(yyyymmdd[3]));
+        }
+        
+        return null;
+      };
+      
+      const d1 = parseDate(date1Str);
+      const d2 = parseDate(date2Str);
+      
+      if (!d1 || !d2) return Infinity;
+      
+      const diffTime = Math.abs(d2.getTime() - d1.getTime());
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      return diffDays;
+    } catch (e) {
+      return Infinity;
+    }
+  };
+
   const handleRemoveZeroArrears = () => {
     if (data.length === 0) {
       toast({ title: "No Data", description: "Please import data first", variant: "destructive" });
@@ -312,10 +346,15 @@ export default function Stage4() {
 
     const headers = recalculatedData[0] as string[];
     const arrearsIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'arrears');
-    const debitIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount'.toLowerCase());
-    const creditIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount'.toLowerCase());
+    const debitIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount');
+    const creditIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount');
+    const debitNoIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit no');
+    const taxTypeIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'tax type');
+    const payrollYearIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'payroll year');
+    const caseTypeIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'case type');
+    const valueDateIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'value date');
 
-    if (arrearsIndex === -1 || debitIndex === -1 || creditIndex === -1) {
+    if (debitIndex === -1 || creditIndex === -1) {
       toast({
         title: "Columns Not Found",
         description: "Required columns missing",
@@ -324,29 +363,160 @@ export default function Stage4() {
       return;
     }
 
-    const newData: any[] = [headers];
-    const newRemovedCache = new Set(removedRowsCache);
-    let removed = 0;
+    // Track which rows to remove
+    const rowsToRemove = new Set<number>();
 
+    // Build list of data rows (excluding structural rows)
+    const dataRows: Array<{ idx: number; row: any[] }> = [];
     for (let i = 1; i < recalculatedData.length; i++) {
       const row = recalculatedData[i];
-
       const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = debitIndex !== -1 && row[debitIndex] !== undefined && row[debitIndex] !== null && String(row[debitIndex]).trim() !== '';
       const creditPresent = creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== null && String(row[creditIndex]).trim() !== '';
       const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
 
-      // Preserve structural rows: blank separators, totals label rows, grand total rows, and totals separator rows
+      // Skip structural rows
+      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotal) {
+        continue;
+      }
+
+      dataRows.push({ idx: i, row });
+    }
+
+    // RULE 1: Full Offset by Debit Number
+    const debitNoGroups = new Map<string, Array<{ idx: number; row: any[]; debit: number; credit: number }>>();
+    
+    for (const { idx, row } of dataRows) {
+      const debitNo = debitNoIndex !== -1 ? String(row[debitNoIndex] || '').trim() : '';
+      if (debitNo && debitNo !== '–' && debitNo !== '-' && debitNo !== '') {
+        const debit = parseFloat(String(row[debitIndex] || 0).replace(/,/g, '')) || 0;
+        const credit = parseFloat(String(row[creditIndex] || 0).replace(/,/g, '')) || 0;
+        
+        if (!debitNoGroups.has(debitNo)) {
+          debitNoGroups.set(debitNo, []);
+        }
+        debitNoGroups.get(debitNo)!.push({ idx, row, debit, credit });
+      }
+    }
+
+    // Check each Debit No group for full offset
+    for (const [debitNo, group] of debitNoGroups.entries()) {
+      if (group.length > 1) {
+        const totalDebit = group.reduce((sum, item) => sum + item.debit, 0);
+        const totalCredit = group.reduce((sum, item) => sum + item.credit, 0);
+        
+        // If offset (within tolerance), mark all rows for removal
+        if (Math.abs(totalDebit - totalCredit) < 0.01) {
+          group.forEach(item => rowsToRemove.add(item.idx));
+        }
+      }
+    }
+
+    // RULE 2: Offset Without Debit Number (implicit matching)
+    for (let i = 0; i < dataRows.length; i++) {
+      if (rowsToRemove.has(dataRows[i].idx)) continue;
+      
+      const row1 = dataRows[i].row;
+      const debitNo1 = debitNoIndex !== -1 ? String(row1[debitNoIndex] || '').trim() : '';
+      const debit1 = parseFloat(String(row1[debitIndex] || 0).replace(/,/g, '')) || 0;
+      const credit1 = parseFloat(String(row1[creditIndex] || 0).replace(/,/g, '')) || 0;
+      
+      // Only check if one row has missing Debit No
+      const missingDebitNo1 = !debitNo1 || debitNo1 === '–' || debitNo1 === '-';
+      
+      if (!missingDebitNo1) continue;
+      
+      // Look for matching row
+      for (let j = i + 1; j < dataRows.length; j++) {
+        if (rowsToRemove.has(dataRows[j].idx)) continue;
+        
+        const row2 = dataRows[j].row;
+        const debitNo2 = debitNoIndex !== -1 ? String(row2[debitNoIndex] || '').trim() : '';
+        const debit2 = parseFloat(String(row2[debitIndex] || 0).replace(/,/g, '')) || 0;
+        const credit2 = parseFloat(String(row2[creditIndex] || 0).replace(/,/g, '')) || 0;
+        
+        const missingDebitNo2 = !debitNo2 || debitNo2 === '–' || debitNo2 === '-';
+        
+        // At least one must have missing Debit No
+        if (!missingDebitNo1 && !missingDebitNo2) continue;
+        
+        // Check if amounts offset (one has debit, other has credit)
+        const totalDebit = debit1 + debit2;
+        const totalCredit = credit1 + credit2;
+        
+        if (Math.abs(totalDebit - totalCredit) < 0.01 && Math.abs(totalDebit) > 0.01) {
+          // Check matching criteria
+          const taxType1 = taxTypeIndex !== -1 ? String(row1[taxTypeIndex] || '').trim() : '';
+          const taxType2 = taxTypeIndex !== -1 ? String(row2[taxTypeIndex] || '').trim() : '';
+          const payrollYear1 = payrollYearIndex !== -1 ? String(row1[payrollYearIndex] || '').trim() : '';
+          const payrollYear2 = payrollYearIndex !== -1 ? String(row2[payrollYearIndex] || '').trim() : '';
+          const caseType1 = caseTypeIndex !== -1 ? String(row1[caseTypeIndex] || '').trim() : '';
+          const caseType2 = caseTypeIndex !== -1 ? String(row2[caseTypeIndex] || '').trim() : '';
+          const valueDate1 = valueDateIndex !== -1 ? String(row1[valueDateIndex] || '').trim() : '';
+          const valueDate2 = valueDateIndex !== -1 ? String(row2[valueDateIndex] || '').trim() : '';
+          
+          const taxTypeMatch = taxType1.toLowerCase() === taxType2.toLowerCase();
+          const payrollYearMatch = payrollYear1 === payrollYear2;
+          const caseTypeMatch = caseType1.toLowerCase() === caseType2.toLowerCase();
+          const dateDiff = daysDifference(valueDate1, valueDate2);
+          const dateMatch = dateDiff <= 31;
+          
+          if (taxTypeMatch && payrollYearMatch && caseTypeMatch && dateMatch) {
+            rowsToRemove.add(dataRows[i].idx);
+            rowsToRemove.add(dataRows[j].idx);
+            break; // Found match for row i, move to next
+          }
+        }
+      }
+    }
+
+    // RULE 3: Zero Debit with No Corresponding Entry
+    for (const { idx, row } of dataRows) {
+      if (rowsToRemove.has(idx)) continue;
+      
+      const debit = parseFloat(String(row[debitIndex] || 0).replace(/,/g, '')) || 0;
+      const debitNo = debitNoIndex !== -1 ? String(row[debitNoIndex] || '').trim() : '';
+      const missingDebitNo = !debitNo || debitNo === '–' || debitNo === '-';
+      
+      if (Math.abs(debit) < 0.01 && missingDebitNo) {
+        rowsToRemove.add(idx);
+      }
+    }
+
+    // RULE 4: Empty Debit and Credit
+    for (const { idx, row } of dataRows) {
+      if (rowsToRemove.has(idx)) continue;
+      
+      const debit = parseFloat(String(row[debitIndex] || 0).replace(/,/g, '')) || 0;
+      const credit = parseFloat(String(row[creditIndex] || 0).replace(/,/g, '')) || 0;
+      
+      if (Math.abs(debit) < 0.01 && Math.abs(credit) < 0.01) {
+        rowsToRemove.add(idx);
+      }
+    }
+
+    // Build new data excluding removed rows
+    const newData: any[] = [headers];
+    const newRemovedCache = new Set(removedRowsCache);
+    let removed = 0;
+
+    for (let i = 1; i < recalculatedData.length; i++) {
+      const row = recalculatedData[i];
+      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
+      const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
+      const debitPresent = debitIndex !== -1 && row[debitIndex] !== undefined && row[debitIndex] !== null && String(row[debitIndex]).trim() !== '';
+      const creditPresent = creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== null && String(row[creditIndex]).trim() !== '';
+      const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+
+      // Always preserve structural rows
       if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotal) {
         newData.push(row);
         continue;
       }
 
-      const arrears = parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
-
-      // Remove any data row where Arrears is zero (use tolerance for floating-point precision)
-      if (Math.abs(arrears) < 0.01) {
+      // Remove data rows marked for removal
+      if (rowsToRemove.has(i)) {
         const rowId = `${i}-${row.join('-')}`;
         newRemovedCache.add(rowId);
         removed++;
@@ -371,9 +541,9 @@ export default function Stage4() {
     localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
 
     toast({
-      title: '✅ Zero Arrear Entries Removed',
-      description: `Removed ${removed} rows with Arrears = 0. Group totals recalculated, exact two-row separation maintained.`,
-      duration: 4000,
+      title: '✅ Offset Entries Removed',
+      description: `Removed ${removed} rows using advanced offset detection (Debit No matching, implicit matching, zero entries). Group totals recalculated, two-row separation maintained.`,
+      duration: 5000,
     });
   };
 
@@ -940,24 +1110,25 @@ export default function Stage4() {
         <CardHeader>
           <CardTitle className="flex items-center">
             <Trash2 className="h-5 w-5 mr-2" />
-            Zero Arrears Removal
+            Advanced Offset & Zero Entry Removal
           </CardTitle>
           <CardDescription>
-            Remove entries where Arrears = 0 (offset or empty entries)
+            Remove offset entries using intelligent matching rules
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              <strong>Universal Arrear Calculation:</strong> For all rows: <strong>Arrear = Debit Amount - Credit Amount</strong>
+              <strong>Advanced Offset Detection Rules:</strong>
               <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
-                <li>If Debit = Credit → Arrear = 0 (Balanced Entry)</li>
-                <li>If Debit &gt; Credit → Arrear = Positive (Outstanding Liability)</li>
-                <li>If Credit &gt; Debit → Arrear = Negative (Overpayment)</li>
+                <li><strong>Rule 1 - Full Offset by Debit Number:</strong> Removes rows sharing same Debit No where total Debit = total Credit</li>
+                <li><strong>Rule 2 - Implicit Matching:</strong> Matches offsetting entries without Debit No if Tax Type, Payroll Year, Case Type match and dates within 31 days</li>
+                <li><strong>Rule 3 - Zero Debit:</strong> Removes rows with Debit = 0 and missing Debit No</li>
+                <li><strong>Rule 4 - Empty Entries:</strong> Removes rows where both Debit and Credit are 0 or blank</li>
               </ul>
               <p className="mt-2 text-xs text-muted-foreground">
-                <strong>Zero Arrears Removal:</strong> Removes all data rows where <strong>Arrears = 0</strong> (offset or empty entries). Structural total/blank separator rows are preserved; formatting stays intact.
+                All structural rows (totals, separators, GRAND TOTAL) are preserved. Format and spacing maintained.
               </p>
             </AlertDescription>
           </Alert>
@@ -965,11 +1136,11 @@ export default function Stage4() {
           <div className="flex gap-2">
             <Button onClick={handleRemoveZeroArrears} variant="destructive">
               <Trash2 className="mr-2 h-4 w-4" />
-              Remove Zero Arrears
+              Remove Offset Entries
             </Button>
             <Button onClick={handleRestoreRemoved} variant="outline">
               <RotateCcw className="mr-2 h-4 w-4" />
-              Restore Removed
+              Reset to Original
             </Button>
           </div>
         </CardContent>
