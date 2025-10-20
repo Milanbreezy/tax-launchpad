@@ -1660,21 +1660,21 @@ export default function Stage4() {
     const creditIndex = findColumnIndex("Credit Amount");
     
     return (
-      <ScrollArea className="h-[400px] rounded-border">
-        <div className="relative overflow-auto">
-          <table className="w-full border-collapse text-sm">
+      <div className="h-[400px] overflow-auto border rounded-md">
+        <div className="relative min-w-max">
+          <table className="w-full border-collapse text-sm min-w-max">
             <thead className="sticky top-0 bg-background z-10">
               <tr className="border-b-2 border-border">
                 {headers.map((header: string, idx: number) => {
                   // Make Last Event column wider for better visibility
                   const isLastEvent = header?.toLowerCase().trim() === 'last event';
                   return (
-                    <th 
+                     <th 
                       key={idx} 
-                      className="border-2 border-border p-3 text-left font-bold bg-muted whitespace-normal min-w-[120px]"
+                      className="border-2 border-border p-3 text-left font-bold bg-muted whitespace-nowrap"
                       style={{ 
                         borderColor: 'black',
-                        minWidth: isLastEvent ? '280px' : '120px'
+                        minWidth: isLastEvent ? '300px' : '140px'
                       }}
                     >
                       {header}
@@ -1821,15 +1821,18 @@ export default function Stage4() {
                         }
 
                         return (
-                          <td 
+                           <td 
                             key={cellIdx} 
                             className={`
-                              border-2 p-2 whitespace-normal break-words
+                              border-2 p-2 whitespace-nowrap
                               ${isArrearsCol && (isTotalSeparatorRow || isGrandTotal || isTotal) ? arrearsColor : ''}
                               ${(isTotal || isGrandTotal || isTotalSeparatorRow) ? 'font-extrabold' : ''}
                               ${isNumeric || (isArrearsCol && (isTotalSeparatorRow || isGrandTotal || isTotal)) ? 'text-right tabular-nums' : ''}
                             `}
-                            style={{ borderColor: 'black' }}
+                            style={{ 
+                              borderColor: 'black',
+                              minWidth: '140px'
+                            }}
                           >
                             {displayValue}
                           </td>
@@ -1843,16 +1846,16 @@ export default function Stage4() {
             </tbody>
           </table>
         </div>
-      </ScrollArea>
+      </div>
     );
   };
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Stage 4: Entry Removal & Analysis</h1>
+        <h1 className="text-3xl font-bold">Stage 4: Group, Totals & Entry Removal</h1>
         <p className="text-muted-foreground mt-2">
-          Remove zero arrears, filter by tax type and case type
+          Add row separations, calculate group totals, and remove invalid entries using Debit Linkage Validation
         </p>
       </div>
 
@@ -2692,8 +2695,8 @@ export default function Stage4() {
           <ArrowLeft className="mr-2 h-4 w-4" />
           Previous Stage
         </Button>
-        <Button onClick={() => navigate("/stage-5")}>
-          Next: Summary Generation
+        <Button onClick={() => navigate("/stage-6")}>
+          Next: Tax Position Summary
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>

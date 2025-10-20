@@ -30,9 +30,9 @@ const stages = [
   { path: "/stage-1", label: "Import", icon: Upload, stage: 1 },
   { path: "/stage-2", label: "Clean", icon: Sparkles, stage: 2 },
   { path: "/stage-3", label: "Enhance", icon: Layers, stage: 3 },
-  { path: "/stage-4", label: "Group & Total", icon: Grid3x3, stage: 4 },
-  { path: "/stage-5", label: "Remove", icon: Filter, stage: 5 },
-  { path: "/stage-6", label: "Summary", icon: FileText, stage: 6 },
+  { path: "/stage-4", label: "Group, Total & Remove", icon: Grid3x3, stage: 4 },
+  { path: "/stage-5", label: "Summary Generation", icon: FileText, stage: 5 },
+  { path: "/stage-6", label: "Final Report", icon: FileText, stage: 6 },
 ];
 
 export default function AppLayout({ children }: AppLayoutProps) {
