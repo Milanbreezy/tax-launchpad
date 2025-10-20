@@ -103,28 +103,10 @@ export default function Stage4() {
       return dataArray;
     }
     
-    const recalculatedData = dataArray.map((row, idx) => {
-      // Skip header row
-      if (idx === 0) return row;
-      
-      // Skip empty rows and total rows
-      if (isEmptyRow(row) || isTotalRow(row)) return row;
-      
-      // Parse numeric values
-      const debit = parseFloat(String(row[debitIndex] || 0).replace(/,/g, "")) || 0;
-      const credit = parseFloat(String(row[creditIndex] || 0).replace(/,/g, "")) || 0;
-      
-      // Calculate arrears: Debit - Credit
-      const calculatedArrears = debit - credit;
-      
-      // Update the arrears column
-      const newRow = [...row];
-      newRow[arrearsIndex] = calculatedArrears;
-      
-      return newRow;
-    });
-    
-    return recalculatedData;
+    // NOTE: Arrears are now calculated ONLY on group total rows during recalculateGroupTotals()
+    // Individual data rows have blank arrears
+    // This function now only ensures the column exists
+    return dataArray;
   };
 
   const loadData = () => {
@@ -556,69 +538,60 @@ export default function Stage4() {
     });
   };
 
-  // Remove ALL Zero Arrears rows (single-click)
+  // Remove ALL Zero Arrears rows (strengthened version)
   const handleRemoveAllZeroArrears = () => {
     if (data.length === 0) {
       toast({ title: "No Data", description: "Please import data first", variant: "destructive" });
       return;
     }
 
-    const recalculated = recalculateArrears(data);
-    const headers = recalculated[0] as string[];
-
-    const arrearsIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'arrears');
+    const headers = data[0] as string[];
     const debitIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount');
     const creditIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount');
-    const debitNoIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit no');
-    const taxTypeIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'tax type');
-    const payrollYearIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'payroll year');
-    const caseTypeIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'case type');
-    const valueDateIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'value date');
 
     if (debitIdx === -1 || creditIdx === -1) {
       toast({ title: "Columns Not Found", description: "Required columns missing", variant: "destructive" });
       return;
     }
 
-    // Build list of candidate rows (skip totals, separators, GRAND TOTAL)
-    const candidates: Array<{ idx: number; row: any[] }> = [];
-    for (let i = 1; i < recalculated.length; i++) {
-      const row = recalculated[i];
-      const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
-      const debitPresent = row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
-      const creditPresent = row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
-      const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
-      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotalRow(row)) continue;
-      candidates.push({ idx: i, row });
-    }
-
+    // Build list of candidate data rows (skip totals, separators, GRAND TOTAL, headers)
     const rowsToRemove = new Set<number>();
-
-    // A) Per-row zero arrears or both amounts zero
-    for (const { idx, row } of candidates) {
-      const d = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
-      const c = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
-      const a = arrearsIdx !== -1 ? (parseFloat(String(row[arrearsIdx] || 0).replace(/,/g, '')) || 0) : (d - c);
-      if (Math.abs(a) < 0.01 || (Math.abs(d) < 0.01 && Math.abs(c) < 0.01)) rowsToRemove.add(idx);
-    }
-
-    // Note: For "Remove ALL Zero Arrears", we only remove per-row zero balances.
-    // We intentionally do NOT perform cross-row offset matching here to avoid accidental deletions.
-
-
-    // Build new data array
-    const newData: any[] = [headers];
-    let removed = 0;
-    for (let i = 1; i < recalculated.length; i++) {
-      const row = recalculated[i];
+    
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      
+      // Skip structural rows (totals, separators, GRAND TOTAL)
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
       const creditPresent = row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
       const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+      
       if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotalRow(row)) {
-        newData.push(row);
         continue;
       }
+      
+      // Parse debit and credit amounts with tolerance
+      const debit = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
+      const credit = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
+      const arrears = debit - credit;
+      
+      // Remove if: (Debit = Credit) OR (both Debit and Credit are zero)
+      // Using ±0.01 tolerance for floating point comparison
+      const isBalanced = Math.abs(arrears) < 0.01;
+      const bothZero = Math.abs(debit) < 0.01 && Math.abs(credit) < 0.01;
+      
+      if (isBalanced || bothZero) {
+        rowsToRemove.add(i);
+      }
+    }
+
+    // Build new data array excluding removed rows
+    const newData: any[] = [headers];
+    let removed = 0;
+    
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      
       if (rowsToRemove.has(i)) {
         removed++;
       } else {
@@ -626,8 +599,13 @@ export default function Stage4() {
       }
     }
 
+    // Recalculate group totals with arrears ONLY on total rows
     const withTotals = recalculateGroupTotals(newData);
+    
+    // Compress to exactly two separator rows per group
     const compressed = compressSeparatorRows(withTotals);
+    
+    // Update statistics
     const stats = calculateRemainingStatistics(compressed);
 
     setData(compressed);
@@ -639,7 +617,7 @@ export default function Stage4() {
 
     toast({
       title: '🧹 Zero Arrears Removed',
-      description: `Removed ${removed} zero-arrears rows. Totals recalculated; GRAND TOTAL pinned at bottom. Data row order preserved.`,
+      description: `Removed ${removed} zero-arrears rows (balanced or empty entries). Group totals recalculated. GRAND TOTAL at bottom.`,
       duration: 5000,
     });
   };
@@ -874,11 +852,11 @@ export default function Stage4() {
             }, 0);
             const groupArrearsTotal = groupDebitTotal - groupCreditTotal;
 
-            // Create totals row (first separator)
+            // Create totals row (first separator) - arrears calculated here
             const totalsRow = headers.map(() => '');
-            totalsRow[debitIdx] = String(groupDebitTotal);
-            totalsRow[creditIdx] = String(groupCreditTotal);
-            totalsRow[arrearsIdx] = String(groupArrearsTotal);
+            totalsRow[debitIdx] = formatCurrency(groupDebitTotal);
+            totalsRow[creditIdx] = formatCurrency(groupCreditTotal);
+            totalsRow[arrearsIdx] = formatCurrency(groupArrearsTotal); // Display as 0.00 if zero
             result.push(totalsRow);
 
             // Create blank row (second separator)
@@ -917,10 +895,11 @@ export default function Stage4() {
       }, 0);
       const groupArrearsTotal = groupDebitTotal - groupCreditTotal;
 
+      // Create totals row with formatted values and arrears calculated
       const totalsRow = headers.map(() => '');
-      totalsRow[debitIdx] = String(groupDebitTotal);
-      totalsRow[creditIdx] = String(groupCreditTotal);
-      totalsRow[arrearsIdx] = String(groupArrearsTotal);
+      totalsRow[debitIdx] = formatCurrency(groupDebitTotal);
+      totalsRow[creditIdx] = formatCurrency(groupCreditTotal);
+      totalsRow[arrearsIdx] = formatCurrency(groupArrearsTotal); // Display as 0.00 if zero
       result.push(totalsRow);
 
       const blankRow = headers.map(() => '');
@@ -1079,12 +1058,11 @@ export default function Stage4() {
                   const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
                   const isSecondSeparatorRow = nonNumericEmpty && !debitPresent && !creditPresent && !isTotal && !isGrandTotal;
 
-                  // Calculate arrears for total separator rows: Arrears = Debit - Credit
+                  // Calculate arrears for total separator rows: read pre-formatted value
                   let calculatedArrears = 0;
-                  if (isTotalSeparatorRow && debitIndex !== -1 && creditIndex !== -1) {
-                    const debitTotal = parseFloat(String(row[debitIndex] || 0).replace(/,/g, '')) || 0;
-                    const creditTotal = parseFloat(String(row[creditIndex] || 0).replace(/,/g, '')) || 0;
-                    calculatedArrears = debitTotal - creditTotal;
+                  if (isTotalSeparatorRow && arrearsIndex !== -1) {
+                    const arrearsStr = String(row[arrearsIndex] || '0');
+                    calculatedArrears = parseFloat(arrearsStr.replace(/,/g, '')) || 0;
                   }
 
                   // Color coding for arrears in total rows
@@ -1117,15 +1095,19 @@ export default function Stage4() {
                         if (isSecondSeparatorRow) {
                           displayValue = '';
                         }
-                        // Arrears column: calculate and display for total separator rows
+                        // Arrears column: display formatted value for total separator rows
                         else if (isArrearsCol && isTotalSeparatorRow) {
-                          displayValue = formatCurrency(calculatedArrears);
+                          // Value already formatted in recalculateGroupTotals
+                          displayValue = cell ?? '0.00';
                         }
-                        // Arrears column: ALWAYS show Debit - Credit for all other rows (including zeros)
+                        // Arrears column: display for GRAND TOTAL and labeled total rows
+                        else if (isArrearsCol && (isGrandTotal || isTotal)) {
+                          const numValue = parseFloat(String(cell ?? '').toString().replace(/,/g, ''));
+                          displayValue = !isNaN(numValue) ? formatCurrency(numValue) : '0.00';
+                        }
+                        // Arrears column: BLANK for regular data rows (arrears only on totals)
                         else if (isArrearsCol) {
-                          const dVal = debitIndex !== -1 ? (parseFloat(String(row[debitIndex] ?? '').toString().replace(/,/g, '')) || 0) : 0;
-                          const cVal = creditIndex !== -1 ? (parseFloat(String(row[creditIndex] ?? '').toString().replace(/,/g, '')) || 0) : 0;
-                          displayValue = formatCurrency(dVal - cVal);
+                          displayValue = '';
                         }
                         // Format numeric columns
                         else if (isNumeric) {
@@ -1239,7 +1221,7 @@ export default function Stage4() {
             </Button>
             <Button onClick={handleRemoveAllZeroArrears} variant="destructive">
               <CheckCircle2 className="mr-2 h-4 w-4" />
-              Remove ALL Zero Arrears
+              Remove Zero/Balanced Entries
             </Button>
             <Button onClick={handleRestoreRemoved} variant="outline">
               <RotateCcw className="mr-2 h-4 w-4" />
