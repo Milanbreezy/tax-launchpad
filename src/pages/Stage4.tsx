@@ -553,93 +553,149 @@ export default function Stage4() {
               </tr>
             </thead>
             <tbody>
-              {data.slice(1).map((row: any[], rowIdx: number) => {
-                const isEmpty = isEmptyRow(row);
-                const isTotal = isTotalRow(row);
-                const isGrandTotal = row[0]?.toString().toUpperCase().includes("GRAND");
+              {(() => {
+                const rows = data.slice(1);
+                const headers = data[0];
 
-                // Detect empty separator rows: first one carries totals, second is blank
-                const hasValues = isEmpty && (
-                  (debitIndex !== -1 && row[debitIndex] !== undefined && row[debitIndex] !== '' && row[debitIndex] !== null) ||
-                  (creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== '' && row[creditIndex] !== null)
-                );
-                const isTotalSeparatorRow = isEmpty && hasValues; // first separator with totals
-                const isSecondSeparatorRow = isEmpty && !hasValues && !isTotal && !isGrandTotal; // blank row
+                const isNonNumericEmpty = (row: any[]) =>
+                  row.every((cell, idx) => {
+                    const header = headers[idx];
+                    const numeric = isNumericColumn(header);
+                    if (numeric) return true; // ignore numeric cells when checking emptiness
+                    return !cell || String(cell).trim() === "";
+                  });
 
-                // Calculate arrears for total rows: Arrears = Debit - Credit
-                let calculatedArrears = 0;
-                if (isTotalSeparatorRow && debitIndex !== -1 && creditIndex !== -1) {
-                  const debitTotal = parseFloat(String(row[debitIndex] || 0).replace(/,/g, '')) || 0;
-                  const creditTotal = parseFloat(String(row[creditIndex] || 0).replace(/,/g, '')) || 0;
-                  calculatedArrears = debitTotal - creditTotal;
+                const hasDebit = (row: any[]) =>
+                  debitIndex !== -1 && row[debitIndex] !== undefined && row[debitIndex] !== null && String(row[debitIndex]).toString().trim() !== "";
+                const hasCredit = (row: any[]) =>
+                  creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== null && String(row[creditIndex]).toString().trim() !== "";
+
+                // Collapse more than two consecutive separator rows (keep at most: first totals row + one blank row)
+                const filteredRows: any[] = [];
+                let sepRun = 0;
+                let lastWasTotalSep = false;
+
+                for (const row of rows) {
+                  const isGrandTotal = row[0]?.toString().toUpperCase().includes("GRAND");
+                  const totalLabelRow = isTotalRow(row);
+                  const nonNumericEmpty = isNonNumericEmpty(row);
+                  const debitPresent = hasDebit(row);
+                  const creditPresent = hasCredit(row);
+                  const totalSep = nonNumericEmpty && (debitPresent || creditPresent);
+                  const blankSep = nonNumericEmpty && !debitPresent && !creditPresent && !totalLabelRow && !isGrandTotal;
+
+                  if (blankSep || totalSep) {
+                    if (totalSep) {
+                      sepRun = 1;
+                      lastWasTotalSep = true;
+                      filteredRows.push(row);
+                    } else {
+                      // blank separator
+                      if (lastWasTotalSep && sepRun === 1) {
+                        sepRun = 2; // allow only one blank after totals row
+                        filteredRows.push(row);
+                      } else if (!lastWasTotalSep && sepRun < 1) {
+                        // In rare cases of stray blanks without preceding totals, allow a single blank
+                        sepRun = 1;
+                        filteredRows.push(row);
+                      }
+                      // else skip extra blanks
+                    }
+                  } else {
+                    // reset streak when non-separator row encountered
+                    sepRun = 0;
+                    lastWasTotalSep = false;
+                    filteredRows.push(row);
+                  }
                 }
 
-                // Color coding for arrears in total rows
-                let arrearsColor = "";
-                if (arrearsIndex !== -1 && (isTotalSeparatorRow || isGrandTotal || isTotal)) {
-                  const arrearsValue = isTotalSeparatorRow ? calculatedArrears : parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
-                  if (arrearsValue === 0) arrearsColor = "text-muted-foreground";
-                  else if (arrearsValue < 0) arrearsColor = "text-destructive font-semibold";
-                  else if (arrearsValue > 0) arrearsColor = "text-success font-semibold";
-                }
-                
-                return (
-                  <tr 
-                    key={rowIdx}
-                    className={`
-                      ${isSecondSeparatorRow ? "bg-muted/30" : ""}
-                      ${isTotal && !isGrandTotal ? "bg-blue-50 dark:bg-blue-950/20 font-extrabold" : ""}
-                      ${isTotalSeparatorRow ? "bg-blue-50 dark:bg-blue-950/20 font-extrabold border-t-2 border-b-2" : ""}
-                      ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 border-t-[3px] border-b-[3px] font-extrabold" : ""}
-                    `}
-                    style={(isGrandTotal || isTotalSeparatorRow || isTotal) ? { borderColor: 'black' } : {}}
-                  >
-                    {row.map((cell: any, cellIdx: number) => {
-                      const header = headers[cellIdx];
-                      const isNumeric = isNumericColumn(header);
-                      const isArrearsCol = cellIdx === arrearsIndex;
-                      let displayValue: any = cell ?? '';
+                return filteredRows.map((row: any[], rowIdx: number) => {
+                  const isGrandTotal = row[0]?.toString().toUpperCase().includes("GRAND");
+                  const isTotal = isTotalRow(row);
 
-                      // Second separator row: enforce completely empty
-                      if (isSecondSeparatorRow) {
-                        displayValue = '';
-                      }
-                      // Arrears column: calculate and display for total separator rows
-                      else if (isArrearsCol && isTotalSeparatorRow) {
-                        displayValue = formatCurrency(calculatedArrears);
-                      }
-                      // Hide arrears for regular data rows (only show in total rows)
-                      else if (isArrearsCol && !(isTotalSeparatorRow || isGrandTotal || isTotal)) {
-                        displayValue = '';
-                      }
-                      // Format numeric columns
-                      else if (isNumeric) {
-                        const numValue = parseFloat(String(cell ?? '').toString().replace(/,/g, ''));
-                        if (!isNaN(numValue)) {
-                          displayValue = formatCurrency(numValue);
-                        } else {
+                  const nonNumericEmpty = isNonNumericEmpty(row);
+                  const debitPresent = hasDebit(row);
+                  const creditPresent = hasCredit(row);
+
+                  const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+                  const isSecondSeparatorRow = nonNumericEmpty && !debitPresent && !creditPresent && !isTotal && !isGrandTotal;
+
+                  // Calculate arrears for total separator rows: Arrears = Debit - Credit
+                  let calculatedArrears = 0;
+                  if (isTotalSeparatorRow && debitIndex !== -1 && creditIndex !== -1) {
+                    const debitTotal = parseFloat(String(row[debitIndex] || 0).replace(/,/g, '')) || 0;
+                    const creditTotal = parseFloat(String(row[creditIndex] || 0).replace(/,/g, '')) || 0;
+                    calculatedArrears = debitTotal - creditTotal;
+                  }
+
+                  // Color coding for arrears in total rows
+                  let arrearsColor = "";
+                  if (arrearsIndex !== -1 && (isTotalSeparatorRow || isGrandTotal || isTotal)) {
+                    const arrearsValue = isTotalSeparatorRow ? calculatedArrears : parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
+                    if (arrearsValue === 0) arrearsColor = "text-muted-foreground";
+                    else if (arrearsValue < 0) arrearsColor = "text-destructive font-semibold";
+                    else if (arrearsValue > 0) arrearsColor = "text-success font-semibold";
+                  }
+
+                  return (
+                    <tr 
+                      key={rowIdx}
+                      className={`
+                        ${isSecondSeparatorRow ? "bg-muted/30" : ""}
+                        ${isTotal && !isGrandTotal ? "bg-blue-50 dark:bg-blue-950/20 font-extrabold" : ""}
+                        ${isTotalSeparatorRow ? "bg-blue-50 dark:bg-blue-950/20 font-extrabold border-t-2 border-b-2" : ""}
+                        ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 border-t-[3px] border-b-[3px] font-extrabold" : ""}
+                      `}
+                      style={(isGrandTotal || isTotalSeparatorRow || isTotal) ? { borderColor: 'black' } : {}}
+                    >
+                      {row.map((cell: any, cellIdx: number) => {
+                        const header = headers[cellIdx];
+                        const isNumeric = isNumericColumn(header);
+                        const isArrearsCol = cellIdx === arrearsIndex;
+                        let displayValue: any = cell ?? '';
+
+                        // Second separator row: enforce completely empty
+                        if (isSecondSeparatorRow) {
                           displayValue = '';
                         }
-                      }
+                        // Arrears column: calculate and display for total separator rows
+                        else if (isArrearsCol && isTotalSeparatorRow) {
+                          displayValue = formatCurrency(calculatedArrears);
+                        }
+                        // Hide arrears for regular data rows (only show in total rows)
+                        else if (isArrearsCol && !(isTotalSeparatorRow || isGrandTotal || isTotal)) {
+                          displayValue = '';
+                        }
+                        // Format numeric columns
+                        else if (isNumeric) {
+                          const numValue = parseFloat(String(cell ?? '').toString().replace(/,/g, ''));
+                          if (!isNaN(numValue)) {
+                            displayValue = formatCurrency(numValue);
+                          } else {
+                            displayValue = '';
+                          }
+                        }
 
-                      return (
-                        <td 
-                          key={cellIdx} 
-                          className={`
-                            border-2 p-2 whitespace-normal break-words
-                            ${isArrearsCol && (isTotalSeparatorRow || isGrandTotal || isTotal) ? arrearsColor : ''}
-                            ${(isTotal || isGrandTotal || isTotalSeparatorRow) ? 'font-extrabold' : ''}
-                            ${isNumeric || (isArrearsCol && (isTotalSeparatorRow || isGrandTotal || isTotal)) ? 'text-right tabular-nums' : ''}
-                          `}
-                          style={{ borderColor: 'black' }}
-                        >
-                          {displayValue}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
+                        return (
+                          <td 
+                            key={cellIdx} 
+                            className={`
+                              border-2 p-2 whitespace-normal break-words
+                              ${isArrearsCol && (isTotalSeparatorRow || isGrandTotal || isTotal) ? arrearsColor : ''}
+                              ${(isTotal || isGrandTotal || isTotalSeparatorRow) ? 'font-extrabold' : ''}
+                              ${isNumeric || (isArrearsCol && (isTotalSeparatorRow || isGrandTotal || isTotal)) ? 'text-right tabular-nums' : ''}
+                            `}
+                            style={{ borderColor: 'black' }}
+                          >
+                            {displayValue}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                });
+              })()}
+
             </tbody>
           </table>
         </div>
