@@ -46,6 +46,9 @@ interface FamilyEntry {
   creditAmount: number;
   arrears: number;
   valueDate: string;
+  period: string;
+  yearOfPayment: string;
+  lastEvent: string;
   category: 'Core' | 'Adjustment' | 'Settlement' | 'Penalty' | 'Misc';
 }
 
@@ -910,6 +913,8 @@ export default function Stage4() {
     const debitIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'debit amount');
     const creditIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'credit amount');
     const valueDateIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'value date');
+    const yearOfPaymentIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'year of payment');
+    const lastEventIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'last event');
 
     if (debitNoIdx === -1 || taxTypeIdx === -1 || payrollYearIdx === -1 || caseTypeIdx === -1) {
       toast({ title: "Columns Not Found", description: "Required columns missing", variant: "destructive" });
@@ -958,6 +963,9 @@ export default function Stage4() {
             creditAmount: creditAmt,
             arrears,
             valueDate: valueDateIdx !== -1 ? String(row[valueDateIdx] || '') : '',
+            period,
+            yearOfPayment: yearOfPaymentIdx !== -1 ? String(row[yearOfPaymentIdx] || '') : '',
+            lastEvent: lastEventIdx !== -1 ? String(row[lastEventIdx] || '') : '',
             category: classifyCaseType(caseType)
           }
         });
@@ -980,6 +988,9 @@ export default function Stage4() {
         creditAmount: creditAmt,
         arrears,
         valueDate: valueDateIdx !== -1 ? String(row[valueDateIdx] || '') : '',
+        period,
+        yearOfPayment: yearOfPaymentIdx !== -1 ? String(row[yearOfPaymentIdx] || '') : '',
+        lastEvent: lastEventIdx !== -1 ? String(row[lastEventIdx] || '') : '',
         category: classifyCaseType(caseType)
       });
     }
@@ -2067,7 +2078,10 @@ export default function Stage4() {
                   <CheckCircle2 className="h-4 w-4 mr-2" />
                   ✅ Valid Linked Entries (Keep) - {debitFamilies.filter(f => f.isValid).length} Families
                 </h3>
-                <ScrollArea className="max-h-[300px]">
+                <p className="text-xs text-muted-foreground mb-3">
+                  Scroll through to review all entries with complete details (Category, Case Type, Value Date, Period, Year of Payment, Debit/Credit/Arrears, Last Event)
+                </p>
+                <ScrollArea className="max-h-[600px]">
                   <div className="space-y-2">
                     {debitFamilies.filter(f => f.isValid).map((family, idx) => (
                       <div key={idx} className="p-3 rounded border bg-background">
@@ -2094,17 +2108,42 @@ export default function Stage4() {
                         </div>
 
                         <div className="space-y-1">
-                          {family.entries.map((entry, entryIdx) => (
-                            <div key={entryIdx} className="flex items-center gap-2 text-xs p-2 bg-muted/50 rounded">
-                              <Badge variant="outline" className="text-xs font-semibold">
-                                {entry.category}
-                              </Badge>
-                              <span className="flex-1">{entry.caseType}</span>
-                              <span className="text-muted-foreground tabular-nums">
-                                D: {formatCurrency(entry.debitAmount)} | C: {formatCurrency(entry.creditAmount)}
-                              </span>
-                            </div>
-                          ))}
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs border">
+                              <thead className="bg-muted">
+                                <tr>
+                                  <th className="border p-1 text-left">Category</th>
+                                  <th className="border p-1 text-left">Case Type</th>
+                                  <th className="border p-1 text-left">Value Date</th>
+                                  <th className="border p-1 text-left">Period</th>
+                                  <th className="border p-1 text-left">Year of Payment</th>
+                                  <th className="border p-1 text-right">Debit Amount</th>
+                                  <th className="border p-1 text-right">Credit Amount</th>
+                                  <th className="border p-1 text-right">Arrears</th>
+                                  <th className="border p-1 text-left">Last Event</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {family.entries.map((entry, entryIdx) => (
+                                  <tr key={entryIdx} className="hover:bg-muted/50">
+                                    <td className="border p-1">
+                                      <Badge variant="outline" className="text-xs">
+                                        {entry.category}
+                                      </Badge>
+                                    </td>
+                                    <td className="border p-1">{entry.caseType}</td>
+                                    <td className="border p-1">{entry.valueDate}</td>
+                                    <td className="border p-1">{entry.period}</td>
+                                    <td className="border p-1">{entry.yearOfPayment}</td>
+                                    <td className="border p-1 text-right tabular-nums">{formatCurrency(entry.debitAmount)}</td>
+                                    <td className="border p-1 text-right tabular-nums">{formatCurrency(entry.creditAmount)}</td>
+                                    <td className="border p-1 text-right tabular-nums font-semibold">{formatCurrency(entry.arrears)}</td>
+                                    <td className="border p-1">{entry.lastEvent}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -2118,7 +2157,10 @@ export default function Stage4() {
                   <AlertCircle className="h-4 w-4 mr-2" />
                   ❌ Orphaned or Invalid Entries (Remove) - {debitFamilies.filter(f => !f.isValid).length} Families
                 </h3>
-                <ScrollArea className="max-h-[300px]">
+                <p className="text-xs text-muted-foreground mb-3">
+                  Scroll through to review all entries suggested for removal with complete details
+                </p>
+                <ScrollArea className="max-h-[600px]">
                   <div className="space-y-2">
                      {debitFamilies.filter(f => !f.isValid).map((family, idx) => (
                        <div key={idx} className={`p-3 rounded border ${family.isOrphaned ? 'border-destructive/50 bg-destructive/10' : 'bg-background'}`}>
@@ -2151,19 +2193,44 @@ export default function Stage4() {
                            ⚠️ {family.reason}
                          </div>
 
-                         <div className="space-y-1">
-                           {family.entries.map((entry, entryIdx) => (
-                             <div key={entryIdx} className="flex items-center gap-2 text-xs p-2 bg-muted/50 rounded">
-                               <Badge variant="outline" className="text-xs font-semibold">
-                                 {entry.category}
-                               </Badge>
-                               <span className="flex-1">{entry.caseType}</span>
-                               <span className="text-muted-foreground tabular-nums">
-                                 D: {formatCurrency(entry.debitAmount)} | C: {formatCurrency(entry.creditAmount)}
-                               </span>
-                             </div>
-                           ))}
-                         </div>
+                          <div className="space-y-1">
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs border">
+                                <thead className="bg-muted">
+                                  <tr>
+                                    <th className="border p-1 text-left">Category</th>
+                                    <th className="border p-1 text-left">Case Type</th>
+                                    <th className="border p-1 text-left">Value Date</th>
+                                    <th className="border p-1 text-left">Period</th>
+                                    <th className="border p-1 text-left">Year of Payment</th>
+                                    <th className="border p-1 text-right">Debit Amount</th>
+                                    <th className="border p-1 text-right">Credit Amount</th>
+                                    <th className="border p-1 text-right">Arrears</th>
+                                    <th className="border p-1 text-left">Last Event</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {family.entries.map((entry, entryIdx) => (
+                                    <tr key={entryIdx} className="hover:bg-muted/50">
+                                      <td className="border p-1">
+                                        <Badge variant="outline" className="text-xs">
+                                          {entry.category}
+                                        </Badge>
+                                      </td>
+                                      <td className="border p-1">{entry.caseType}</td>
+                                      <td className="border p-1">{entry.valueDate}</td>
+                                      <td className="border p-1">{entry.period}</td>
+                                      <td className="border p-1">{entry.yearOfPayment}</td>
+                                      <td className="border p-1 text-right tabular-nums">{formatCurrency(entry.debitAmount)}</td>
+                                      <td className="border p-1 text-right tabular-nums">{formatCurrency(entry.creditAmount)}</td>
+                                      <td className="border p-1 text-right tabular-nums font-semibold">{formatCurrency(entry.arrears)}</td>
+                                      <td className="border p-1">{entry.lastEvent}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
                        </div>
                      ))}
                   </div>
