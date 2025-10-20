@@ -547,6 +547,58 @@ export default function Stage4() {
     });
   };
 
+  // Remove ALL Zero Arrears rows (single-click)
+  const handleRemoveAllZeroArrears = () => {
+    if (data.length === 0) {
+      toast({ title: "No Data", description: "Please import data first", variant: "destructive" });
+      return;
+    }
+    const recalculated = recalculateArrears(data);
+    const headers = recalculated[0] as string[];
+    const arrearsIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'arrears');
+    const debitIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount');
+    const creditIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount');
+    if (debitIdx === -1 || creditIdx === -1) {
+      toast({ title: "Columns Not Found", description: "Required columns missing", variant: "destructive" });
+      return;
+    }
+    const newData: any[] = [headers];
+    let removed = 0;
+    for (let i = 1; i < recalculated.length; i++) {
+      const row = recalculated[i];
+      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
+      const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
+      const debitPresent = debitIdx !== -1 && row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
+      const creditPresent = creditIdx !== -1 && row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
+      const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotal) {
+        newData.push(row);
+        continue;
+      }
+      const debit = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
+      const credit = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
+      const arrears = arrearsIdx !== -1 ? (parseFloat(String(row[arrearsIdx] || 0).replace(/,/g, '')) || 0) : (debit - credit);
+      if (Math.abs(arrears) < 0.01 || Math.abs(debit - credit) < 0.01) {
+        removed++;
+      } else {
+        newData.push(row);
+      }
+    }
+    const withTotals = recalculateGroupTotals(newData);
+    const compressed = compressSeparatorRows(withTotals);
+    const stats = calculateRemainingStatistics(compressed);
+    setData(compressed);
+    setRemovedCount(removedCount + removed);
+    setRemainingRows(stats.remainingRows);
+    setTotalArrears(stats.totalArrears);
+    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
+    toast({
+      title: '🧹 Zero Arrears Removed',
+      description: `Removed ${removed} zero-arrears rows. Group totals recalculated; GRAND TOTAL stays at the bottom.`,
+      duration: 5000,
+    });
+  };
+
   const handleRestoreRemoved = () => {
     // Recalculate arrears when restoring
     const recalculatedOriginal = recalculateArrears(originalData);
@@ -1136,7 +1188,11 @@ export default function Stage4() {
           <div className="flex gap-2">
             <Button onClick={handleRemoveZeroArrears} variant="destructive">
               <Trash2 className="mr-2 h-4 w-4" />
-              Remove Offset Entries
+              Smart Offset Removal
+            </Button>
+            <Button onClick={handleRemoveAllZeroArrears} variant="destructive">
+              <CheckCircle2 className="mr-2 h-4 w-4" />
+              Remove ALL Zero Arrears
             </Button>
             <Button onClick={handleRestoreRemoved} variant="outline">
               <RotateCcw className="mr-2 h-4 w-4" />
