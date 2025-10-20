@@ -1101,54 +1101,111 @@ export default function Stage4() {
     executeRemoval(rowsToRemove, selectedFamilies.length);
   };
 
+  // Recalculate GRAND TOTAL based on remaining data
+  const recalculateGrandTotal = (dataArray: any[]): any[] => {
+    if (dataArray.length === 0) return dataArray;
+
+    const headers = dataArray[0] as string[];
+    const debitIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount');
+    const creditIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount');
+    const arrearsIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'arrears');
+
+    if (debitIdx === -1 || creditIdx === -1 || arrearsIdx === -1) {
+      return dataArray;
+    }
+
+    // Calculate grand totals from all data rows (excluding separators and totals)
+    let grandDebitTotal = 0;
+    let grandCreditTotal = 0;
+
+    for (let i = 1; i < dataArray.length; i++) {
+      const row = dataArray[i];
+      const isDataRow = !isEmptyRow(row) && !isTotalRow(row) && !isGrandTotalRow(row);
+      
+      if (isDataRow) {
+        const debit = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
+        const credit = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
+        grandDebitTotal += debit;
+        grandCreditTotal += credit;
+      }
+    }
+
+    const grandArrearsTotal = grandDebitTotal - grandCreditTotal;
+
+    // Create GRAND TOTAL rows
+    const grandTotalLabelRow = headers.map(() => '');
+    grandTotalLabelRow[0] = 'GRAND TOTAL';
+    
+    const grandTotalValuesRow = headers.map(() => '');
+    grandTotalValuesRow[debitIdx] = formatCurrency(grandDebitTotal);
+    grandTotalValuesRow[creditIdx] = formatCurrency(grandCreditTotal);
+    grandTotalValuesRow[arrearsIdx] = formatCurrency(grandArrearsTotal);
+
+    const blankRow = headers.map(() => '');
+
+    // Append GRAND TOTAL rows at the end
+    return [...dataArray, blankRow, grandTotalLabelRow, grandTotalValuesRow];
+  };
+
   // Execute the actual removal and sheet update
   const executeRemoval = (rowsToRemove: Set<number>, familyCount: number) => {
     // Take snapshot for undo
     setLastSnapshot(JSON.parse(JSON.stringify(data)));
 
     const headers = data[0];
+    const debitIdx = headers.findIndex((h: string) => h?.toLowerCase().trim() === 'debit amount');
+    const creditIdx = headers.findIndex((h: string) => h?.toLowerCase().trim() === 'credit amount');
+    const arrearsIdx = headers.findIndex((h: string) => h?.toLowerCase().trim() === 'arrears');
+
     const newData = [headers];
     let removed = 0;
 
+    // Filter out removed rows (exclude GRAND TOTAL rows - they will be recalculated)
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       const isGrandTotal = isGrandTotalRow(row);
 
+      // Skip GRAND TOTAL rows - we'll recalculate them fresh
       if (isGrandTotal) {
-        newData.push(row);
         continue;
       }
 
       if (rowsToRemove.has(i)) {
         removed++;
       } else {
+        // Recalculate arrears for each remaining data row (Debit - Credit)
+        if (debitIdx !== -1 && creditIdx !== -1 && arrearsIdx !== -1) {
+          const isDataRow = !isEmptyRow(row) && !isTotalRow(row);
+          if (isDataRow) {
+            const debit = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
+            const credit = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
+            row[arrearsIdx] = formatCurrency(debit - credit);
+          }
+        }
         newData.push(row);
       }
     }
 
-    // Recalculate totals and compress
+    // Recalculate group totals (this will regenerate all group total rows)
     const withRecalculatedTotals = recalculateGroupTotals(newData);
     const compressed = compressSeparatorRows(withRecalculatedTotals);
 
-    // Post-update validation
-    const beforeRowCount = data.length;
-    const afterRowCount = compressed.length;
-    const expectedDifference = rowsToRemove.size;
-    const actualDifference = beforeRowCount - afterRowCount;
+    // Recalculate and append GRAND TOTAL rows based on remaining data
+    const finalData = recalculateGrandTotal(compressed);
 
     // Update state
-    const stats = calculateRemainingStatistics(compressed);
-    setData(compressed);
+    const stats = calculateRemainingStatistics(finalData);
+    setData(finalData);
     setRemovedCount(removedCount + removed);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
 
     // Re-analyze to update summaries
-    analyzeTaxTypes(compressed);
-    analyzeCaseTypes(compressed);
+    analyzeTaxTypes(finalData);
+    analyzeCaseTypes(finalData);
 
     // Save to localStorage
-    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
+    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(finalData));
 
     // Clear pending removals and analysis
     setPendingRemovals(new Set());
@@ -1157,8 +1214,8 @@ export default function Stage4() {
 
     // Flash highlight remaining rows (optional visual feedback)
     const remainingRowIndices = new Set<number>();
-    for (let i = 1; i < compressed.length; i++) {
-      if (!isEmptyRow(compressed[i]) && !isTotalRow(compressed[i]) && !isGrandTotalRow(compressed[i])) {
+    for (let i = 1; i < finalData.length; i++) {
+      if (!isEmptyRow(finalData[i]) && !isTotalRow(finalData[i]) && !isGrandTotalRow(finalData[i])) {
         remainingRowIndices.add(i);
       }
     }
@@ -1168,7 +1225,7 @@ export default function Stage4() {
     // Show success message with auto-dismiss
     toast({
       title: '✅ Entries Removed & Sheet Updated',
-      description: `Successfully removed ${removed} row(s) from ${familyCount} families. All totals and arrears automatically recalculated. Sheet synchronized.`,
+      description: `Successfully removed ${removed} row(s) from ${familyCount} families. All arrears, totals, and GRAND TOTAL recalculated. Sheet fully synchronized.`,
       duration: 3000
     });
   };
