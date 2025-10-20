@@ -1177,19 +1177,17 @@ export default function Stage4() {
 
     const grandArrearsTotal = grandDebitTotal - grandCreditTotal;
 
-    // Create GRAND TOTAL rows
-    const grandTotalLabelRow = headers.map(() => '');
-    grandTotalLabelRow[0] = 'GRAND TOTAL';
-    
-    const grandTotalValuesRow = headers.map(() => '');
-    grandTotalValuesRow[debitIdx] = formatCurrency(grandDebitTotal);
-    grandTotalValuesRow[creditIdx] = formatCurrency(grandCreditTotal);
-    grandTotalValuesRow[arrearsIdx] = formatCurrency(grandArrearsTotal);
+    // Create a SINGLE GRAND TOTAL row with all values aligned
+    const grandTotalRow = headers.map(() => '');
+    grandTotalRow[0] = 'GRAND TOTAL';
+    grandTotalRow[debitIdx] = formatCurrency(grandDebitTotal);
+    grandTotalRow[creditIdx] = formatCurrency(grandCreditTotal);
+    grandTotalRow[arrearsIdx] = formatCurrency(grandArrearsTotal);
 
     const blankRow = headers.map(() => '');
 
-    // Append GRAND TOTAL rows at the end
-    return [...dataArray, blankRow, grandTotalLabelRow, grandTotalValuesRow];
+    // Append blank separator and GRAND TOTAL row at the end
+    return [...dataArray, blankRow, grandTotalRow];
   };
 
   // Execute the actual removal and sheet update
