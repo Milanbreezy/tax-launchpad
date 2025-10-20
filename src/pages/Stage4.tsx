@@ -35,6 +35,7 @@ interface DebitFamily {
   isValid: boolean;
   reason: string;
   suggestion: 'KEEP' | 'REMOVE';
+  selected: boolean;
 }
 
 interface FamilyEntry {
@@ -71,6 +72,7 @@ export default function Stage4() {
   const [debitFamilies, setDebitFamilies] = useState<DebitFamily[]>([]);
   const [linkageExpanded, setLinkageExpanded] = useState(false);
   const [linkageAnalyzed, setLinkageAnalyzed] = useState(false);
+  const [reviewMode, setReviewMode] = useState(true); // Preview mode by default
   useEffect(() => {
     loadData();
   }, []);
@@ -868,7 +870,7 @@ export default function Stage4() {
     return 'Misc';
   };
 
-  // Analyze Debit Linkage
+  // Analyze Debit Linkage with Enhanced Validation
   const analyzeDebitLinkage = () => {
     if (data.length === 0) {
       toast({ title: "No Data", description: "Please import data first", variant: "destructive" });
@@ -933,64 +935,62 @@ export default function Stage4() {
       });
     }
 
-    // Analyze each family
+    // Analyze each family with enhanced validation
     const families: DebitFamily[] = [];
 
     for (const [key, entries] of familyMap.entries()) {
       const [debitNo, taxType, payrollYear, period] = key.split('||');
 
-      // Check if family has at least one core liability
       const hasCoreEntry = entries.some(e => e.category === 'Core');
-      
-      // Check family size
-      const isSingleEntry = entries.length === 1;
-      
-      // Check if it's only settlement entries without core
-      const onlySettlements = entries.every(e => e.category === 'Settlement') && !hasCoreEntry;
-      
-      // Check if it's only penalties without core
-      const onlyPenalties = entries.every(e => e.category === 'Penalty') && !hasCoreEntry;
+      const hasSettlement = entries.some(e => e.category === 'Settlement');
+      const hasPenalty = entries.some(e => e.category === 'Penalty');
+      const familySize = entries.length;
 
       let isValid = false;
       let reason = '';
       let suggestion: 'KEEP' | 'REMOVE' = 'REMOVE';
 
-      if (isSingleEntry) {
+      // Enhanced Validation Rules
+      if (familySize === 1) {
         const entry = entries[0];
         if (entry.category === 'Core') {
+          // Single core liability can be valid if it's a standalone assessment
           isValid = true;
-          reason = 'Single core liability entry - valid standalone';
+          reason = 'Single core liability - valid standalone assessment';
           suggestion = 'KEEP';
         } else if (entry.category === 'Settlement') {
           isValid = false;
-          reason = 'Orphaned settlement (discharge/payment) - no matching debit';
+          reason = 'Orphaned settlement - no matching core liability';
           suggestion = 'REMOVE';
         } else if (entry.category === 'Penalty') {
           isValid = false;
-          reason = 'Orphaned penalty - no matching core liability';
+          reason = 'Orphaned penalty - no core liability to attach to';
           suggestion = 'REMOVE';
         } else {
           isValid = false;
-          reason = `Single ${entry.category} entry - no core liability`;
+          reason = `Single ${entry.category} entry without core liability`;
           suggestion = 'REMOVE';
         }
-      } else {
-        // Multiple entries
+      } else if (familySize >= 2) {
+        // Family must have at least one Core Liability to be valid
         if (hasCoreEntry) {
           isValid = true;
-          reason = `Valid family with ${entries.length} entries (includes core liability)`;
+          const components = [];
+          if (hasSettlement) components.push('settlements');
+          if (hasPenalty) components.push('penalties');
+          reason = `Complete family: Core liability + ${components.join(' + ')} (${familySize} entries)`;
           suggestion = 'KEEP';
-        } else if (onlySettlements) {
+        } else if (hasSettlement && !hasCoreEntry) {
           isValid = false;
-          reason = 'Only settlement entries - no core liability to settle';
+          reason = `${familySize} settlement entries without core liability`;
           suggestion = 'REMOVE';
-        } else if (onlyPenalties) {
+        } else if (hasPenalty && !hasCoreEntry) {
           isValid = false;
-          reason = 'Only penalties - no core liability attached';
+          reason = `${familySize} penalty entries without core liability`;
           suggestion = 'REMOVE';
         } else {
           isValid = false;
-          reason = `No core liability found in family (${entries.length} entries)`;
+          reason = `${familySize} entries but no core liability found`;
           suggestion = 'REMOVE';
         }
       }
@@ -1003,7 +1003,8 @@ export default function Stage4() {
         entries,
         isValid,
         reason,
-        suggestion
+        suggestion,
+        selected: !isValid // Auto-select invalid families for removal
       });
     }
 
@@ -1027,19 +1028,49 @@ export default function Stage4() {
     });
   };
 
-  // Remove Invalid Debit Families
-  const removeInvalidDebitFamilies = () => {
+  // Toggle family selection
+  const toggleFamilySelection = (debitNo: string) => {
+    setDebitFamilies(prev => prev.map(f => 
+      f.debitNo === debitNo ? { ...f, selected: !f.selected } : f
+    ));
+  };
+
+  // Select/Unselect all families
+  const selectAllFamilies = () => {
+    setDebitFamilies(prev => prev.map(f => ({ ...f, selected: true })));
+  };
+
+  const unselectAllFamilies = () => {
+    setDebitFamilies(prev => prev.map(f => ({ ...f, selected: false })));
+  };
+
+  // Remove Selected Debit Families
+  const removeSelectedDebitFamilies = () => {
     if (debitFamilies.length === 0) {
       toast({ title: "No Analysis", description: "Please run Debit Linkage Analysis first" });
       return;
     }
 
+    const selectedFamilies = debitFamilies.filter(f => f.selected);
+    if (selectedFamilies.length === 0) {
+      toast({ title: "No Selection", description: "Please select families to remove" });
+      return;
+    }
+
+    if (reviewMode) {
+      toast({ 
+        title: "Review Mode Active", 
+        description: "Disable Review Mode to execute removal",
+        variant: "destructive"
+      });
+      return;
+    }
+
     setLastSnapshot(JSON.parse(JSON.stringify(data)));
 
-    const invalidFamilies = debitFamilies.filter(f => !f.isValid);
     const rowsToRemove = new Set<number>();
 
-    invalidFamilies.forEach(family => {
+    selectedFamilies.forEach(family => {
       family.entries.forEach(entry => {
         rowsToRemove.add(entry.rowIndex);
       });
@@ -1075,6 +1106,9 @@ export default function Stage4() {
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
 
+    analyzeTaxTypes(compressed);
+    analyzeCaseTypes(compressed);
+
     localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
 
     // Clear analysis to force re-analysis
@@ -1082,8 +1116,8 @@ export default function Stage4() {
     setLinkageAnalyzed(false);
 
     toast({
-      title: '🧹 Invalid Families Removed',
-      description: `Removed ${removed} row(s) from ${invalidFamilies.length} invalid families. Re-run analysis to verify.`,
+      title: '🧹 Selected Families Removed',
+      description: `Removed ${removed} row(s) from ${selectedFamilies.length} selected families. Re-run analysis to verify.`,
       duration: 5000
     });
   };
@@ -1654,7 +1688,7 @@ export default function Stage4() {
         </CardContent>
       </Card>
 
-      {/* Debit Linkage Validation Module */}
+      {/* Debit Linkage Validation Module - Enhanced */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center">
@@ -1669,11 +1703,12 @@ export default function Stage4() {
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              <strong>Validation Logic:</strong>
+              <strong>Enhanced Validation Logic:</strong>
               <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
                 <li><strong>Core Liabilities:</strong> Final Original, Provisional Original, Additional Assessment, Audit</li>
-                <li><strong>Valid Family:</strong> Must contain at least one core liability entry</li>
-                <li><strong>Invalid (Remove):</strong> Orphaned settlements, standalone penalties, missing core liabilities</li>
+                <li><strong>Valid Family (2+ entries):</strong> Must contain at least one Core Liability + Settlement/Penalty</li>
+                <li><strong>Valid Single:</strong> Standalone Core Liability assessments are valid</li>
+                <li><strong>Invalid (Remove):</strong> Orphaned settlements, standalone penalties, families without core</li>
                 <li><strong>Grouping:</strong> By Debit No + Tax Type + Payroll Year + Period</li>
               </ul>
               <p className="mt-2 text-xs text-muted-foreground">
@@ -1682,89 +1717,176 @@ export default function Stage4() {
             </AlertDescription>
           </Alert>
 
-          <div className="flex gap-2">
+          <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="review-mode"
+                checked={reviewMode}
+                onCheckedChange={(checked) => setReviewMode(checked as boolean)}
+              />
+              <label
+                htmlFor="review-mode"
+                className="text-sm font-medium cursor-pointer"
+              >
+                Review Mode (Preview Only)
+              </label>
+            </div>
+            <Badge variant={reviewMode ? 'secondary' : 'default'}>
+              {reviewMode ? 'Safe Preview' : 'Removal Enabled'}
+            </Badge>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
             <Button onClick={analyzeDebitLinkage} variant="default">
               <CheckCircle2 className="mr-2 h-4 w-4" />
               Analyze Debit Linkage
             </Button>
             <Button 
-              onClick={removeInvalidDebitFamilies} 
+              onClick={removeSelectedDebitFamilies} 
               variant="destructive"
-              disabled={!linkageAnalyzed || debitFamilies.filter(f => !f.isValid).length === 0}
+              disabled={!linkageAnalyzed || debitFamilies.filter(f => f.selected).length === 0}
             >
               <Trash2 className="mr-2 h-4 w-4" />
-              Remove Invalid Families
+              Remove Selected ({debitFamilies.filter(f => f.selected).length})
+            </Button>
+            <Button 
+              onClick={selectAllFamilies}
+              variant="outline"
+              disabled={!linkageAnalyzed}
+            >
+              Select All
+            </Button>
+            <Button 
+              onClick={unselectAllFamilies}
+              variant="outline"
+              disabled={!linkageAnalyzed}
+            >
+              Unselect All
             </Button>
           </div>
 
           {linkageAnalyzed && (
-            <div className="mt-4 p-4 bg-muted rounded-lg">
-              <div className="grid grid-cols-3 gap-4 text-center mb-4">
+            <div className="mt-4 space-y-4">
+              <div className="grid grid-cols-4 gap-4 text-center p-4 bg-muted rounded-lg">
                 <div>
                   <p className="text-sm text-muted-foreground">Total Families</p>
                   <p className="text-2xl font-bold">{debitFamilies.length}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Valid Families</p>
+                  <p className="text-sm text-muted-foreground">Valid (Keep)</p>
                   <p className="text-2xl font-bold text-success">{debitFamilies.filter(f => f.isValid).length}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Invalid Families</p>
+                  <p className="text-sm text-muted-foreground">Invalid (Remove)</p>
                   <p className="text-2xl font-bold text-destructive">{debitFamilies.filter(f => !f.isValid).length}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Selected</p>
+                  <p className="text-2xl font-bold text-primary">{debitFamilies.filter(f => f.selected).length}</p>
                 </div>
               </div>
 
-              <Collapsible open={linkageExpanded} onOpenChange={setLinkageExpanded}>
-                <CollapsibleTrigger asChild>
-                  <Button variant="outline" className="w-full">
-                    {linkageExpanded ? 'Hide' : 'Show'} Family Details
-                  </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="mt-4 space-y-3 max-h-[400px] overflow-y-auto">
-                  {debitFamilies.map((family, idx) => (
-                    <div 
-                      key={idx} 
-                      className={`p-3 rounded-lg border-2 ${
-                        family.isValid 
-                          ? 'border-success bg-success/5' 
-                          : 'border-destructive bg-destructive/5'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <div className="font-semibold text-sm">
-                            Debit No: {family.debitNo}
+              {/* Valid Families Section */}
+              <div className="border-2 border-success rounded-lg p-4 bg-success/5">
+                <h3 className="font-semibold text-success mb-3 flex items-center">
+                  <CheckCircle2 className="h-4 w-4 mr-2" />
+                  ✅ Valid Linked Entries (Keep) - {debitFamilies.filter(f => f.isValid).length} Families
+                </h3>
+                <ScrollArea className="max-h-[300px]">
+                  <div className="space-y-2">
+                    {debitFamilies.filter(f => f.isValid).map((family, idx) => (
+                      <div key={idx} className="p-3 rounded border bg-background">
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex items-center gap-2 flex-1">
+                            <Checkbox
+                              checked={family.selected}
+                              onCheckedChange={() => toggleFamilySelection(family.debitNo)}
+                            />
+                            <div className="flex-1">
+                              <div className="font-semibold text-sm">
+                                Debit No: {family.debitNo}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {family.taxType} | Year: {family.payrollYear} | Period: {family.period || 'N/A'}
+                              </div>
+                            </div>
                           </div>
-                          <div className="text-xs text-muted-foreground">
-                            {family.taxType} | Year: {family.payrollYear} | Period: {family.period || 'N/A'}
-                          </div>
+                          <Badge variant="default" className="bg-success">KEEP</Badge>
                         </div>
-                        <Badge variant={family.isValid ? 'default' : 'destructive'}>
-                          {family.suggestion}
-                        </Badge>
-                      </div>
-                      
-                      <div className="text-xs mb-2 text-muted-foreground">
-                        {family.reason}
-                      </div>
+                        
+                        <div className="text-xs mb-2 text-muted-foreground italic">
+                          {family.reason}
+                        </div>
 
-                      <div className="space-y-1">
-                        {family.entries.map((entry, entryIdx) => (
-                          <div key={entryIdx} className="flex items-center gap-2 text-xs p-2 bg-background rounded">
-                            <Badge variant="outline" className="text-xs">
-                              {entry.category}
-                            </Badge>
-                            <span className="flex-1">{entry.caseType}</span>
-                            <span className="text-muted-foreground">
-                              D: {formatCurrency(entry.debitAmount)} | C: {formatCurrency(entry.creditAmount)}
-                            </span>
-                          </div>
-                        ))}
+                        <div className="space-y-1">
+                          {family.entries.map((entry, entryIdx) => (
+                            <div key={entryIdx} className="flex items-center gap-2 text-xs p-2 bg-muted/50 rounded">
+                              <Badge variant="outline" className="text-xs font-semibold">
+                                {entry.category}
+                              </Badge>
+                              <span className="flex-1">{entry.caseType}</span>
+                              <span className="text-muted-foreground tabular-nums">
+                                D: {formatCurrency(entry.debitAmount)} | C: {formatCurrency(entry.creditAmount)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </CollapsibleContent>
-              </Collapsible>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </div>
+
+              {/* Invalid Families Section */}
+              <div className="border-2 border-destructive rounded-lg p-4 bg-destructive/5">
+                <h3 className="font-semibold text-destructive mb-3 flex items-center">
+                  <AlertCircle className="h-4 w-4 mr-2" />
+                  ❌ Orphaned or Invalid Entries (Remove) - {debitFamilies.filter(f => !f.isValid).length} Families
+                </h3>
+                <ScrollArea className="max-h-[300px]">
+                  <div className="space-y-2">
+                    {debitFamilies.filter(f => !f.isValid).map((family, idx) => (
+                      <div key={idx} className="p-3 rounded border bg-background">
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex items-center gap-2 flex-1">
+                            <Checkbox
+                              checked={family.selected}
+                              onCheckedChange={() => toggleFamilySelection(family.debitNo)}
+                            />
+                            <div className="flex-1">
+                              <div className="font-semibold text-sm">
+                                Debit No: {family.debitNo}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {family.taxType} | Year: {family.payrollYear} | Period: {family.period || 'N/A'}
+                              </div>
+                            </div>
+                          </div>
+                          <Badge variant="destructive">REMOVE</Badge>
+                        </div>
+                        
+                        <div className="text-xs mb-2 text-destructive italic font-medium">
+                          ⚠️ {family.reason}
+                        </div>
+
+                        <div className="space-y-1">
+                          {family.entries.map((entry, entryIdx) => (
+                            <div key={entryIdx} className="flex items-center gap-2 text-xs p-2 bg-muted/50 rounded">
+                              <Badge variant="outline" className="text-xs font-semibold">
+                                {entry.category}
+                              </Badge>
+                              <span className="flex-1">{entry.caseType}</span>
+                              <span className="text-muted-foreground tabular-nums">
+                                D: {formatCurrency(entry.debitAmount)} | C: {formatCurrency(entry.creditAmount)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </div>
             </div>
           )}
         </CardContent>
