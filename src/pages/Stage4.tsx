@@ -1550,7 +1550,7 @@ export default function Stage4() {
                       className="border-2 border-border p-3 text-left font-bold bg-muted whitespace-normal min-w-[120px]"
                       style={{ 
                         borderColor: 'black',
-                        minWidth: isLastEvent ? '200px' : '120px'
+                        minWidth: isLastEvent ? '280px' : '120px'
                       }}
                     >
                       {header}
@@ -2066,9 +2066,105 @@ export default function Stage4() {
                   <DialogHeader>
                     <DialogTitle>Debit Linkage Validation - Complete Entry Details</DialogTitle>
                     <DialogDescription>
-                      Review all entries categorized by validation status. Use checkboxes to select/unselect entries for removal. Expand sections and scroll to view all details.
+                      Use filter criteria to find specific entries. Check entries to mark for removal. Valid entries are unchecked by default.
                     </DialogDescription>
                   </DialogHeader>
+                  
+                  {/* Filter Section */}
+                  <div className="border rounded-lg p-3 bg-muted/30 space-y-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Filter className="h-4 w-4" />
+                      <span className="font-semibold text-sm">Filter Criteria</span>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setDebitFamilies(prev => prev.map(f => ({ ...f, selected: f.suggestion === 'REMOVE' })));
+                          toast({ title: "Filter Applied", description: "Auto-selected all suggested removals" });
+                        }}
+                      >
+                        Suggested Removals Only
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setDebitFamilies(prev => prev.map(f => ({ ...f, selected: f.isOrphaned ? true : f.selected })));
+                          toast({ title: "Filter Applied", description: "Selected orphaned credits" });
+                        }}
+                      >
+                        Orphaned Credits
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setDebitFamilies(prev => prev.map(f => ({ 
+                            ...f, 
+                            selected: f.entries.some(e => e.category === 'Settlement') && !f.isValid ? true : f.selected 
+                          })));
+                          toast({ title: "Filter Applied", description: "Selected invalid settlements" });
+                        }}
+                      >
+                        Invalid Settlements
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setDebitFamilies(prev => prev.map(f => ({ 
+                            ...f, 
+                            selected: f.entries.some(e => e.category === 'Penalty') && !f.isValid ? true : f.selected 
+                          })));
+                          toast({ title: "Filter Applied", description: "Selected orphaned penalties" });
+                        }}
+                      >
+                        Orphaned Penalties
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setDebitFamilies(prev => prev.map(f => ({ ...f, selected: true })));
+                          toast({ title: "All Selected", description: "Selected all entries for removal" });
+                        }}
+                      >
+                        Select All
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setDebitFamilies(prev => prev.map(f => ({ ...f, selected: false })));
+                          toast({ title: "All Unselected", description: "Unselected all entries" });
+                        }}
+                      >
+                        Unselect All
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setDebitFamilies(prev => prev.map(f => ({ ...f, selected: f.entries.length === 1 && !f.isValid })));
+                          toast({ title: "Filter Applied", description: "Selected single-entry invalids" });
+                        }}
+                      >
+                        Single Entry Invalid
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setDebitFamilies(prev => prev.map(f => ({ ...f, selected: !f.selected })));
+                          toast({ title: "Selection Inverted", description: "Toggled all selections" });
+                        }}
+                      >
+                        Invert Selection
+                      </Button>
+                    </div>
+                  </div>
                   
                   <div className="flex-1 overflow-hidden">
                     <ScrollArea className="h-full pr-4">
@@ -2085,17 +2181,20 @@ export default function Stage4() {
                           </CollapsibleTrigger>
                         </div>
                         <CollapsibleContent className="p-4">
+                          <div className="mb-3 text-xs text-muted-foreground italic">
+                            ℹ️ These entries are valid and should be kept. Uncheck by default. Check only if you want to remove specific families.
+                          </div>
                           <div className="space-y-4">
                             {debitFamilies.filter(f => f.isValid).map((family, familyIdx) => (
                               <div key={familyIdx} className="border rounded-lg p-3 bg-background">
                                 <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-950/20 rounded flex items-start gap-3">
                                   <Checkbox
-                                    checked={!family.selected}
+                                    checked={family.selected}
                                     onCheckedChange={(checked) => {
                                       const updatedFamilies = [...debitFamilies];
                                       const originalIdx = debitFamilies.findIndex(f => f === family);
                                       if (originalIdx !== -1) {
-                                        updatedFamilies[originalIdx] = { ...family, selected: !checked };
+                                        updatedFamilies[originalIdx] = { ...family, selected: !!checked };
                                         setDebitFamilies(updatedFamilies);
                                       }
                                     }}
@@ -2165,6 +2264,9 @@ export default function Stage4() {
                           </CollapsibleTrigger>
                         </div>
                         <CollapsibleContent className="p-4">
+                          <div className="mb-3 text-xs text-muted-foreground italic">
+                            ⚠️ These entries are invalid and suggested for removal. Auto-checked by default. Uncheck if you want to keep specific families.
+                          </div>
                           <div className="space-y-4">
                             {debitFamilies.filter(f => !f.isValid).map((family, familyIdx) => (
                               <div key={familyIdx} className={`border rounded-lg p-3 ${family.isOrphaned ? 'border-destructive bg-destructive/5' : 'bg-background'}`}>
