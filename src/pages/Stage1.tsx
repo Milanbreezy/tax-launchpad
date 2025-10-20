@@ -10,20 +10,22 @@ import * as XLSX from "xlsx";
 import { toast } from "@/hooks/use-toast";
 
 const REQUIRED_COLUMNS = [
-  "Tax Type",
   "Value Date",
-  "Payroll Year",
+  "Period",
   "Year of Payment",
-  "Last Event",
+  "Payroll Year",
+  "Tax Type",
+  "Case Type",
   "Debit No",
   "Debit Amount",
   "Credit Amount",
-  "Period"
+  "Last Event"
 ];
 
 // Header synonyms for flexible matching
 const HEADER_SYNONYMS: Record<string, string[]> = {
   "tax type": ["tax type", "taxtype", "tax_type", "type of tax"],
+  "case type": ["case type", "casetype", "case_type", "type of case"],
   "value date": ["value date", "valuedate", "value_date", "date"],
   "payroll year": ["payroll year", "payrollyear", "payroll_year", "year"],
   "year of payment": ["year of payment", "yearofpayment", "year_of_payment", "payment year"],
