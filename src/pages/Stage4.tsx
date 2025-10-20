@@ -867,28 +867,28 @@ export default function Stage4() {
     });
   };
 
-  // Classify case type into category
+  // Classify case type into category with detailed rules
   const classifyCaseType = (caseType: string): 'Core' | 'Adjustment' | 'Settlement' | 'Penalty' | 'Misc' => {
     const normalized = caseType.toLowerCase().trim();
     
-    // Core Liability Entries
+    // Core Liability Entries (Foundation entries that create initial liability)
     if (normalized.includes('final original') || normalized.includes('provisional original') || 
         normalized.includes('additional assessment') || normalized.includes('audit')) {
       return 'Core';
     }
     
-    // Adjustment Entries
+    // Adjustment Entries (Modify or extend existing liability)
     if (normalized.includes('provisional amended') || normalized.includes('arrears') || 
         normalized.includes('enforcement')) {
       return 'Adjustment';
     }
     
-    // Settlement Entries
+    // Settlement Entries (Clear or settle liabilities)
     if (normalized.includes('discharge') || normalized.includes('regular payment')) {
       return 'Settlement';
     }
     
-    // Penalty & Charges
+    // Penalty & Charges (Add cost for late payment or errors)
     if (normalized.includes('fine') || normalized.includes('penalt') || 
         normalized.includes('interest') || normalized.includes('late submission')) {
       return 'Penalty';
@@ -896,6 +896,181 @@ export default function Stage4() {
     
     // Miscellaneous
     return 'Misc';
+  };
+
+  // Check if case type should depend on core liability based on rules
+  const requiresCoreLink = (caseType: string): boolean => {
+    const normalized = caseType.toLowerCase().trim();
+    
+    // Settlement entries MUST have core liability
+    if (normalized.includes('discharge') || normalized.includes('regular payment')) {
+      return true;
+    }
+    
+    // Penalties SHOULD have core liability
+    if (normalized.includes('fine') || normalized.includes('penalt') || 
+        normalized.includes('interest') || normalized.includes('late submission')) {
+      return true;
+    }
+    
+    // Adjustments depend on core
+    if (normalized.includes('provisional amended') || normalized.includes('enforcement')) {
+      return true;
+    }
+    
+    // Arrears can exist independently but better with core
+    if (normalized.includes('arrears')) {
+      return false; // Arrears can be standalone carryover
+    }
+    
+    return false;
+  };
+
+  // Validate family based on specific case type dependency rules
+  const validateFamilyStructure = (entries: FamilyEntry[]): { isValid: boolean; reason: string; suggestion: 'KEEP' | 'REMOVE' } => {
+    const caseTypes = entries.map(e => e.caseType.toLowerCase().trim());
+    const categories = entries.map(e => e.category);
+    
+    // Check for core entries
+    const hasFinalOriginal = caseTypes.some(ct => ct.includes('final original'));
+    const hasProvisionalOriginal = caseTypes.some(ct => ct.includes('provisional original'));
+    const hasProvisionalAmended = caseTypes.some(ct => ct.includes('provisional amended'));
+    const hasAdditionalAssessment = caseTypes.some(ct => ct.includes('additional assessment'));
+    const hasAudit = caseTypes.some(ct => ct.includes('audit'));
+    const hasCoreEntry = categories.includes('Core');
+    
+    // Check for settlements
+    const hasDischarge = caseTypes.some(ct => ct.includes('discharge'));
+    const hasRegularPayment = caseTypes.some(ct => ct.includes('regular payment'));
+    const hasAnySettlement = categories.includes('Settlement');
+    
+    // Check for penalties
+    const hasFine = caseTypes.some(ct => ct.includes('fine') || ct.includes('penalt'));
+    const hasInterest = caseTypes.some(ct => ct.includes('interest'));
+    const hasLateSubmission = caseTypes.some(ct => ct.includes('late submission'));
+    const hasAnyPenalty = categories.includes('Penalty');
+    
+    // Check for adjustments
+    const hasArrears = caseTypes.some(ct => ct.includes('arrears'));
+    const hasEnforcement = caseTypes.some(ct => ct.includes('enforcement'));
+    
+    const familySize = entries.length;
+    
+    // RULE 1: Single Entry Validation
+    if (familySize === 1) {
+      const entry = entries[0];
+      const caseType = entry.caseType.toLowerCase().trim();
+      
+      // Core entries can stand alone (they create initial liability)
+      if (entry.category === 'Core') {
+        if (caseType.includes('final original')) {
+          return { isValid: true, reason: 'Single Final Original - valid standalone liability', suggestion: 'KEEP' };
+        }
+        if (caseType.includes('provisional original')) {
+          return { isValid: true, reason: 'Single Provisional Original - valid preliminary assessment', suggestion: 'KEEP' };
+        }
+        if (caseType.includes('additional assessment')) {
+          return { isValid: true, reason: 'Single Additional Assessment - valid additional liability', suggestion: 'KEEP' };
+        }
+        if (caseType.includes('audit')) {
+          return { isValid: true, reason: 'Single Audit - valid audit finding', suggestion: 'KEEP' };
+        }
+      }
+      
+      // Arrears can stand alone (carryover from previous periods)
+      if (caseType.includes('arrears')) {
+        return { isValid: true, reason: 'Single Arrears - valid carryover liability', suggestion: 'KEEP' };
+      }
+      
+      // Discharge without matching debit → orphaned settlement
+      if (caseType.includes('discharge')) {
+        return { isValid: false, reason: 'Orphaned Discharge - no matching core liability to clear', suggestion: 'REMOVE' };
+      }
+      
+      // Regular Payment without matching debit → unlinked payment
+      if (caseType.includes('regular payment')) {
+        return { isValid: false, reason: 'Orphaned Regular Payment - no matching liability to settle', suggestion: 'REMOVE' };
+      }
+      
+      // Penalties without core → orphaned charge
+      if (hasAnyPenalty) {
+        return { isValid: false, reason: `Orphaned ${entry.caseType} - no core liability to attach penalty to`, suggestion: 'REMOVE' };
+      }
+      
+      // Provisional Amended without Provisional Original
+      if (caseType.includes('provisional amended')) {
+        return { isValid: false, reason: 'Orphaned Provisional Amended - no Provisional Original to amend', suggestion: 'REMOVE' };
+      }
+      
+      // Enforcement without arrears or core
+      if (caseType.includes('enforcement')) {
+        return { isValid: false, reason: 'Orphaned Enforcement - no arrears or unpaid assessment to enforce', suggestion: 'REMOVE' };
+      }
+      
+      // Others/Misc
+      if (entry.category === 'Misc') {
+        return { isValid: false, reason: 'Single miscellaneous entry without valid linkage', suggestion: 'REMOVE' };
+      }
+      
+      return { isValid: false, reason: `Single ${entry.caseType} entry without proper linkage`, suggestion: 'REMOVE' };
+    }
+    
+    // RULE 2: Multi-Entry Family Validation
+    
+    // Valid structures must have at least one Core entry OR standalone Arrears
+    if (!hasCoreEntry && !hasArrears) {
+      if (hasAnySettlement && hasAnyPenalty) {
+        return { isValid: false, reason: `${familySize} settlement + penalty entries without core liability`, suggestion: 'REMOVE' };
+      }
+      if (hasAnySettlement) {
+        return { isValid: false, reason: `${familySize} settlement entries without core liability to settle`, suggestion: 'REMOVE' };
+      }
+      if (hasAnyPenalty) {
+        return { isValid: false, reason: `${familySize} penalty entries without core liability to charge against`, suggestion: 'REMOVE' };
+      }
+      return { isValid: false, reason: `${familySize} entries without core liability foundation`, suggestion: 'REMOVE' };
+    }
+    
+    // Check for proper hierarchy
+    const components = [];
+    let hierarchyValid = true;
+    let hierarchyReason = '';
+    
+    // Provisional Amended must have Provisional Original
+    if (hasProvisionalAmended && !hasProvisionalOriginal) {
+      hierarchyValid = false;
+      hierarchyReason = 'Has Provisional Amended but missing Provisional Original';
+    }
+    
+    // Enforcement should have arrears or unpaid core
+    if (hasEnforcement && !hasArrears && !hasCoreEntry) {
+      hierarchyValid = false;
+      hierarchyReason = 'Has Enforcement but no arrears or unpaid assessment';
+    }
+    
+    if (!hierarchyValid) {
+      return { isValid: false, reason: `${familySize} entries: ${hierarchyReason}`, suggestion: 'REMOVE' };
+    }
+    
+    // Build description of complete family
+    if (hasFinalOriginal) components.push('Final Original');
+    if (hasProvisionalOriginal) components.push('Provisional Original');
+    if (hasProvisionalAmended) components.push('Provisional Amended');
+    if (hasAdditionalAssessment) components.push('Additional Assessment');
+    if (hasAudit) components.push('Audit');
+    if (hasArrears) components.push('Arrears');
+    if (hasDischarge) components.push('Discharge');
+    if (hasRegularPayment) components.push('Regular Payment');
+    if (hasFine) components.push('Fine/Penalty');
+    if (hasInterest) components.push('Interest');
+    if (hasLateSubmission) components.push('Late Submission');
+    if (hasEnforcement) components.push('Enforcement');
+    
+    return { 
+      isValid: true, 
+      reason: `Complete family: ${components.join(' + ')} (${familySize} entries)`, 
+      suggestion: 'KEEP' 
+    };
   };
 
   // Analyze Debit Linkage with Enhanced Validation
@@ -996,65 +1171,14 @@ export default function Stage4() {
       });
     }
 
-    // Analyze each family with enhanced validation
+    // Analyze each family with detailed case type validation
     const families: DebitFamily[] = [];
 
     for (const [key, entries] of familyMap.entries()) {
       const [debitNo, taxType, payrollYear, period] = key.split('||');
 
-      const hasCoreEntry = entries.some(e => e.category === 'Core');
-      const hasSettlement = entries.some(e => e.category === 'Settlement');
-      const hasPenalty = entries.some(e => e.category === 'Penalty');
-      const familySize = entries.length;
-
-      let isValid = false;
-      let reason = '';
-      let suggestion: 'KEEP' | 'REMOVE' = 'REMOVE';
-
-      // Enhanced Validation Rules
-      if (familySize === 1) {
-        const entry = entries[0];
-        if (entry.category === 'Core') {
-          // Single core liability can be valid if it's a standalone assessment
-          isValid = true;
-          reason = 'Single core liability - valid standalone assessment';
-          suggestion = 'KEEP';
-        } else if (entry.category === 'Settlement') {
-          isValid = false;
-          reason = 'Orphaned settlement - no matching core liability';
-          suggestion = 'REMOVE';
-        } else if (entry.category === 'Penalty') {
-          isValid = false;
-          reason = 'Orphaned penalty - no core liability to attach to';
-          suggestion = 'REMOVE';
-        } else {
-          isValid = false;
-          reason = `Single ${entry.category} entry without core liability`;
-          suggestion = 'REMOVE';
-        }
-      } else if (familySize >= 2) {
-        // Family must have at least one Core Liability to be valid
-        if (hasCoreEntry) {
-          isValid = true;
-          const components = [];
-          if (hasSettlement) components.push('settlements');
-          if (hasPenalty) components.push('penalties');
-          reason = `Complete family: Core liability + ${components.join(' + ')} (${familySize} entries)`;
-          suggestion = 'KEEP';
-        } else if (hasSettlement && !hasCoreEntry) {
-          isValid = false;
-          reason = `${familySize} settlement entries without core liability`;
-          suggestion = 'REMOVE';
-        } else if (hasPenalty && !hasCoreEntry) {
-          isValid = false;
-          reason = `${familySize} penalty entries without core liability`;
-          suggestion = 'REMOVE';
-        } else {
-          isValid = false;
-          reason = `${familySize} entries but no core liability found`;
-          suggestion = 'REMOVE';
-        }
-      }
+      // Use detailed validation based on case type dependency rules
+      const validation = validateFamilyStructure(entries);
 
       families.push({
         debitNo,
@@ -1062,10 +1186,10 @@ export default function Stage4() {
         payrollYear,
         period,
         entries,
-        isValid,
-        reason,
-        suggestion,
-        selected: !isValid, // Auto-select invalid families for removal
+        isValid: validation.isValid,
+        reason: validation.reason,
+        suggestion: validation.suggestion,
+        selected: validation.suggestion === 'REMOVE', // Auto-select only those suggested for removal
         isOrphaned: false
       });
     }
