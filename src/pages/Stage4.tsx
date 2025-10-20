@@ -1187,7 +1187,14 @@ export default function Stage4() {
 
     for (let i = 1; i < dataArray.length; i++) {
       const row = dataArray[i];
-      const isDataRow = !isEmptyRow(row) && !isTotalRow(row) && !isGrandTotalRow(row);
+      
+      // CRITICAL FIX: Exclude total separator rows to prevent double-counting
+      const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
+      const debitPresent = debitIdx !== -1 && row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
+      const creditPresent = creditIdx !== -1 && row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
+      const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+      
+      const isDataRow = !isEmptyRow(row) && !isTotalRow(row) && !isGrandTotalRow(row) && !isTotalSeparatorRow;
       
       if (isDataRow) {
         const debit = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
@@ -1534,15 +1541,22 @@ export default function Stage4() {
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 bg-background z-10">
               <tr className="border-b-2 border-border">
-                {headers.map((header: string, idx: number) => (
-                  <th 
-                    key={idx} 
-                    className="border-2 border-border p-3 text-left font-bold bg-muted whitespace-normal min-w-[120px]"
-                    style={{ borderColor: 'black' }}
-                  >
-                    {header}
-                  </th>
-                ))}
+                {headers.map((header: string, idx: number) => {
+                  // Make Last Event column wider for better visibility
+                  const isLastEvent = header?.toLowerCase().trim() === 'last event';
+                  return (
+                    <th 
+                      key={idx} 
+                      className="border-2 border-border p-3 text-left font-bold bg-muted whitespace-normal min-w-[120px]"
+                      style={{ 
+                        borderColor: 'black',
+                        minWidth: isLastEvent ? '200px' : '120px'
+                      }}
+                    >
+                      {header}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -2052,7 +2066,7 @@ export default function Stage4() {
                   <DialogHeader>
                     <DialogTitle>Debit Linkage Validation - Complete Entry Details</DialogTitle>
                     <DialogDescription>
-                      Review all entries categorized by validation status. Expand sections and scroll to view all details.
+                      Review all entries categorized by validation status. Use checkboxes to select/unselect entries for removal. Expand sections and scroll to view all details.
                     </DialogDescription>
                   </DialogHeader>
                   
@@ -2074,15 +2088,29 @@ export default function Stage4() {
                           <div className="space-y-4">
                             {debitFamilies.filter(f => f.isValid).map((family, familyIdx) => (
                               <div key={familyIdx} className="border rounded-lg p-3 bg-background">
-                                <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-950/20 rounded">
-                                  <div className="font-semibold text-blue-700 dark:text-blue-300">
-                                    Family {familyIdx + 1}: Debit No. {family.debitNo}
-                                  </div>
-                                  <div className="text-sm text-blue-600 dark:text-blue-400">
-                                    {family.taxType} | Payroll Year: {family.payrollYear} | Period: {family.period || 'N/A'}
-                                  </div>
-                                  <div className="text-xs italic mt-1 text-muted-foreground">
-                                    {family.reason}
+                                <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-950/20 rounded flex items-start gap-3">
+                                  <Checkbox
+                                    checked={!family.selected}
+                                    onCheckedChange={(checked) => {
+                                      const updatedFamilies = [...debitFamilies];
+                                      const originalIdx = debitFamilies.findIndex(f => f === family);
+                                      if (originalIdx !== -1) {
+                                        updatedFamilies[originalIdx] = { ...family, selected: !checked };
+                                        setDebitFamilies(updatedFamilies);
+                                      }
+                                    }}
+                                    className="mt-1"
+                                  />
+                                  <div className="flex-1">
+                                    <div className="font-semibold text-blue-700 dark:text-blue-300">
+                                      Family {familyIdx + 1}: Debit No. {family.debitNo}
+                                    </div>
+                                    <div className="text-sm text-blue-600 dark:text-blue-400">
+                                      {family.taxType} | Payroll Year: {family.payrollYear} | Period: {family.period || 'N/A'}
+                                    </div>
+                                    <div className="text-xs italic mt-1 text-muted-foreground">
+                                      {family.reason}
+                                    </div>
                                   </div>
                                 </div>
                                 <div className="overflow-x-auto">
@@ -2140,22 +2168,36 @@ export default function Stage4() {
                           <div className="space-y-4">
                             {debitFamilies.filter(f => !f.isValid).map((family, familyIdx) => (
                               <div key={familyIdx} className={`border rounded-lg p-3 ${family.isOrphaned ? 'border-destructive bg-destructive/5' : 'bg-background'}`}>
-                                <div className="mb-3 p-2 bg-red-50 dark:bg-red-950/20 rounded">
-                                  <div className="font-semibold text-red-700 dark:text-red-300 flex items-center gap-2">
-                                    {family.isOrphaned ? (
-                                      <>
-                                        <Badge variant="destructive" className="text-xs">⚠️ ORPHANED CREDIT</Badge>
-                                        <span>NO DEBIT NUMBER</span>
-                                      </>
-                                    ) : (
-                                      <>Family {familyIdx + 1}: Debit No. {family.debitNo}</>
-                                    )}
-                                  </div>
-                                  <div className="text-sm text-red-600 dark:text-red-400">
-                                    {family.taxType} | Payroll Year: {family.payrollYear} | Period: {family.period || 'N/A'}
-                                  </div>
-                                  <div className="text-xs italic mt-1 font-medium text-destructive">
-                                    ⚠️ {family.reason}
+                                <div className="mb-3 p-2 bg-red-50 dark:bg-red-950/20 rounded flex items-start gap-3">
+                                  <Checkbox
+                                    checked={family.selected}
+                                    onCheckedChange={(checked) => {
+                                      const updatedFamilies = [...debitFamilies];
+                                      const originalIdx = debitFamilies.findIndex(f => f === family);
+                                      if (originalIdx !== -1) {
+                                        updatedFamilies[originalIdx] = { ...family, selected: !!checked };
+                                        setDebitFamilies(updatedFamilies);
+                                      }
+                                    }}
+                                    className="mt-1"
+                                  />
+                                  <div className="flex-1">
+                                    <div className="font-semibold text-red-700 dark:text-red-300 flex items-center gap-2">
+                                      {family.isOrphaned ? (
+                                        <>
+                                          <Badge variant="destructive" className="text-xs">⚠️ ORPHANED CREDIT</Badge>
+                                          <span>NO DEBIT NUMBER</span>
+                                        </>
+                                      ) : (
+                                        <>Family {familyIdx + 1}: Debit No. {family.debitNo}</>
+                                      )}
+                                    </div>
+                                    <div className="text-sm text-red-600 dark:text-red-400">
+                                      {family.taxType} | Payroll Year: {family.payrollYear} | Period: {family.period || 'N/A'}
+                                    </div>
+                                    <div className="text-xs italic mt-1 font-medium text-destructive">
+                                      ⚠️ {family.reason}
+                                    </div>
                                   </div>
                                 </div>
                                 <div className="overflow-x-auto">
