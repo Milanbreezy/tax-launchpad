@@ -344,6 +344,21 @@ export default function Stage4() {
     }
   };
 
+  // Robust amount parser: handles commas, spaces, parentheses for negatives, and trailing minus
+  const parseAmount = (val: any): number => {
+    const s = String(val ?? "").replace(/\u00A0/g, " ").trim();
+    if (!s) return 0;
+    // Remove commas
+    let normalized = s.replace(/,/g, "");
+    // Parentheses indicate negative
+    normalized = normalized.replace(/^\((.*)\)$/,'-$1');
+    // Trailing minus to leading
+    const trailing = normalized.match(/^(-?[0-9]*\.?[0-9]+)-$/);
+    const finalStr = trailing ? `-${trailing[1]}` : normalized;
+    const n = parseFloat(finalStr);
+    return Number.isFinite(n) ? n : 0;
+  };
+
   const handleRemoveZeroArrears = () => {
     if (data.length === 0) {
       toast({ title: "No Data", description: "Please import data first", variant: "destructive" });
@@ -596,10 +611,10 @@ export default function Stage4() {
 
     // A) Per-row zero arrears or both amounts zero
     for (const { idx, row } of candidates) {
-      const d = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
-      const c = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
-      const a = arrearsIdx !== -1 ? (parseFloat(String(row[arrearsIdx] || 0).replace(/,/g, '')) || 0) : (d - c);
-      if (Math.abs(a) < 0.01 || (Math.abs(d) < 0.01 && Math.abs(c) < 0.01)) rowsToRemove.add(idx);
+      const d = parseAmount(row[debitIdx]);
+      const c = parseAmount(row[creditIdx]);
+      const a = arrearsIdx !== -1 ? parseAmount(row[arrearsIdx]) : (d - c);
+      if (Math.abs(a) < 0.01 || Math.abs(d - c) < 0.01 || (Math.abs(d) < 0.01 && Math.abs(c) < 0.01)) rowsToRemove.add(idx);
     }
 
     // B) Full offset by Debit Number (sum Debit == sum Credit for same Debit No)
@@ -614,8 +629,8 @@ export default function Stage4() {
       let sumD = 0, sumC = 0;
       for (const i of idxs) {
         const r = recalculated[i];
-        sumD += parseFloat(String(r[debitIdx] || 0).replace(/,/g, '')) || 0;
-        sumC += parseFloat(String(r[creditIdx] || 0).replace(/,/g, '')) || 0;
+        sumD += parseAmount(r[debitIdx]);
+        sumC += parseAmount(r[creditIdx]);
       }
       if (Math.abs(sumD - sumC) < 0.01 && Math.max(sumD, sumC) > 0) idxs.forEach(i => rowsToRemove.add(i));
     }
@@ -628,8 +643,8 @@ export default function Stage4() {
       const missing1 = !dn1 || dn1 === '–' || dn1 === '-';
       if (!missing1) continue;
 
-      const d1 = parseFloat(String(r1[debitIdx] || 0).replace(/,/g, '')) || 0;
-      const c1 = parseFloat(String(r1[creditIdx] || 0).replace(/,/g, '')) || 0;
+      const d1 = parseAmount(r1[debitIdx]);
+      const c1 = parseAmount(r1[creditIdx]);
 
       for (let j = i + 1; j < candidates.length; j++) {
         if (rowsToRemove.has(candidates[j].idx)) continue;
@@ -638,8 +653,8 @@ export default function Stage4() {
         const missing2 = !dn2 || dn2 === '–' || dn2 === '-';
         if (!missing1 && !missing2) continue;
 
-        const d2 = parseFloat(String(r2[debitIdx] || 0).replace(/,/g, '')) || 0;
-        const c2 = parseFloat(String(r2[creditIdx] || 0).replace(/,/g, '')) || 0;
+        const d2 = parseAmount(r2[debitIdx]);
+        const c2 = parseAmount(r2[creditIdx]);
 
         const totalsOffset = Math.abs((d1 + d2) - (c1 + c2)) < 0.01 && Math.abs(d1 + d2) > 0.01;
         if (totalsOffset) {
@@ -1144,7 +1159,7 @@ export default function Stage4() {
                   // Color coding for arrears in total rows
                   let arrearsColor = "";
                   if (arrearsIndex !== -1 && (isTotalSeparatorRow || isGrandTotal || isTotal)) {
-                    const arrearsValue = isTotalSeparatorRow ? calculatedArrears : parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
+                    const arrearsValue = isTotalSeparatorRow ? calculatedArrears : parseAmount(row[arrearsIndex]);
                     if (arrearsValue === 0) arrearsColor = "text-muted-foreground";
                     else if (arrearsValue < 0) arrearsColor = "text-destructive font-semibold";
                     else if (arrearsValue > 0) arrearsColor = "text-success font-semibold";
@@ -1175,9 +1190,11 @@ export default function Stage4() {
                         else if (isArrearsCol && isTotalSeparatorRow) {
                           displayValue = formatCurrency(calculatedArrears);
                         }
-                        // Hide arrears for regular data rows (only show in total rows)
-                        else if (isArrearsCol && !(isTotalSeparatorRow || isGrandTotal || isTotal)) {
-                          displayValue = '';
+                        // For regular data rows, always display arrears = Debit - Credit
+                        else if (isArrearsCol && !(isGrandTotal || isTotal)) {
+                          const d = parseAmount(row[debitIndex]);
+                          const c = parseAmount(row[creditIndex]);
+                          displayValue = formatCurrency(d - c);
                         }
                         // Format numeric columns
                         else if (isNumeric) {
