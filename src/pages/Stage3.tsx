@@ -421,20 +421,24 @@ export default function Stage3() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ScrollArea className="h-[500px] w-full">
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-sm" style={{ fontFamily: 'Arial, sans-serif' }}>
+            <div className="h-[500px] overflow-auto border rounded-md">
+              <div className="relative min-w-max">
+                <table className="w-full border-collapse text-sm min-w-max" style={{ fontFamily: 'Arial, sans-serif' }}>
                   <thead className="sticky top-0 bg-background z-10">
                     {data.length > 0 && (
                       <tr className="border-b-2 border-border">
-                        {Array.isArray(data[0]) && data[0].map((cell: any, j: number) => (
-                          <th 
-                            key={j} 
-                            className="p-2 border border-border bg-muted font-bold text-left whitespace-nowrap"
-                          >
-                            {cell}
-                          </th>
-                        ))}
+                        {Array.isArray(data[0]) && data[0].map((cell: any, j: number) => {
+                          const isLastEvent = cell?.toString().toLowerCase().trim() === 'last event';
+                          return (
+                            <th 
+                              key={j} 
+                              className="p-2 border border-border bg-muted font-bold text-left whitespace-nowrap"
+                              style={{ minWidth: isLastEvent ? '300px' : '140px' }}
+                            >
+                              {cell}
+                            </th>
+                          );
+                        })}
                       </tr>
                     )}
                   </thead>
@@ -462,6 +466,7 @@ export default function Stage3() {
                             <td 
                               key={j} 
                               className={`p-2 border border-border whitespace-nowrap ${isGrandTotal ? 'font-bold' : ''}`}
+                              style={{ minWidth: '140px' }}
                             >
                               {typeof cell === 'number' ? cell.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : cell}
                             </td>
@@ -472,7 +477,7 @@ export default function Stage3() {
                   </tbody>
                 </table>
               </div>
-            </ScrollArea>
+            </div>
           </CardContent>
         </Card>
       )}
