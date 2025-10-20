@@ -73,6 +73,10 @@ export default function Stage4() {
   const [linkageExpanded, setLinkageExpanded] = useState(false);
   const [linkageAnalyzed, setLinkageAnalyzed] = useState(false);
   const [reviewMode, setReviewMode] = useState(true); // Preview mode by default
+  const [autoUpdate, setAutoUpdate] = useState(true); // Auto-update sheet after removal
+  const [pendingRemovals, setPendingRemovals] = useState<Set<number>>(new Set()); // For strikethrough mode
+  const [flashRows, setFlashRows] = useState<Set<number>>(new Set()); // For flash highlight
+  
   useEffect(() => {
     loadData();
   }, []);
@@ -1044,7 +1048,7 @@ export default function Stage4() {
     setDebitFamilies(prev => prev.map(f => ({ ...f, selected: false })));
   };
 
-  // Remove Selected Debit Families
+  // Remove Selected Debit Families with Auto-Update Support
   const removeSelectedDebitFamilies = () => {
     if (debitFamilies.length === 0) {
       toast({ title: "No Analysis", description: "Please run Debit Linkage Analysis first" });
@@ -1066,15 +1070,32 @@ export default function Stage4() {
       return;
     }
 
-    setLastSnapshot(JSON.parse(JSON.stringify(data)));
-
     const rowsToRemove = new Set<number>();
-
     selectedFamilies.forEach(family => {
       family.entries.forEach(entry => {
         rowsToRemove.add(entry.rowIndex);
       });
     });
+
+    // If Auto-Update is OFF, mark rows for strikethrough instead of removing
+    if (!autoUpdate) {
+      setPendingRemovals(rowsToRemove);
+      toast({
+        title: "⏸️ Removal Pending",
+        description: `${rowsToRemove.size} entries marked for removal. Click "Apply Changes" to update sheet.`,
+        duration: 5000
+      });
+      return;
+    }
+
+    // Auto-Update is ON - Remove immediately
+    executeRemoval(rowsToRemove, selectedFamilies.length);
+  };
+
+  // Execute the actual removal and sheet update
+  const executeRemoval = (rowsToRemove: Set<number>, familyCount: number) => {
+    // Take snapshot for undo
+    setLastSnapshot(JSON.parse(JSON.stringify(data)));
 
     const headers = data[0];
     const newData = [headers];
@@ -1096,30 +1117,68 @@ export default function Stage4() {
       }
     }
 
+    // Recalculate totals and compress
     const withRecalculatedTotals = recalculateGroupTotals(newData);
     const compressed = compressSeparatorRows(withRecalculatedTotals);
 
-    const stats = calculateRemainingStatistics(compressed);
+    // Post-update validation
+    const beforeRowCount = data.length;
+    const afterRowCount = compressed.length;
+    const expectedDifference = rowsToRemove.size;
+    const actualDifference = beforeRowCount - afterRowCount;
 
+    // Update state
+    const stats = calculateRemainingStatistics(compressed);
     setData(compressed);
     setRemovedCount(removedCount + removed);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
 
+    // Re-analyze to update summaries
     analyzeTaxTypes(compressed);
     analyzeCaseTypes(compressed);
 
+    // Save to localStorage
     localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
 
-    // Clear analysis to force re-analysis
+    // Clear pending removals and analysis
+    setPendingRemovals(new Set());
     setDebitFamilies([]);
     setLinkageAnalyzed(false);
 
+    // Flash highlight remaining rows (optional visual feedback)
+    const remainingRowIndices = new Set<number>();
+    for (let i = 1; i < compressed.length; i++) {
+      if (!isEmptyRow(compressed[i]) && !isTotalRow(compressed[i]) && !isGrandTotalRow(compressed[i])) {
+        remainingRowIndices.add(i);
+      }
+    }
+    setFlashRows(remainingRowIndices);
+    setTimeout(() => setFlashRows(new Set()), 2000);
+
+    // Show success message
     toast({
-      title: '🧹 Selected Families Removed',
-      description: `Removed ${removed} row(s) from ${selectedFamilies.length} selected families. Re-run analysis to verify.`,
+      title: '✅ Selected entries successfully removed and sheet updated',
+      description: `Removed ${removed} row(s) from ${familyCount} families. Totals recalculated. (Expected: ${expectedDifference}, Actual: ${actualDifference})`,
       duration: 5000
     });
+  };
+
+  // Apply pending removals (when auto-update is off)
+  const applyPendingRemovals = () => {
+    if (pendingRemovals.size === 0) {
+      toast({ title: "No Pending Changes", description: "No removals pending" });
+      return;
+    }
+
+    const selectedFamilies = debitFamilies.filter(f => f.selected);
+    executeRemoval(pendingRemovals, selectedFamilies.length);
+  };
+
+  // Cancel pending removals
+  const cancelPendingRemovals = () => {
+    setPendingRemovals(new Set());
+    toast({ title: "Cancelled", description: "Pending removals cleared" });
   };
 
   const formatCurrency = (value: number | string) => {
@@ -1364,11 +1423,12 @@ export default function Stage4() {
                   creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== null && String(row[creditIndex]).toString().trim() !== "";
 
                 // Collapse more than two consecutive separator rows (keep at most: first totals row + one blank row)
-                const filteredRows: any[] = [];
+                const filteredRows: Array<{ row: any[], originalIndex: number }> = [];
                 let sepRun = 0;
                 let lastWasTotalSep = false;
 
-                for (const row of rows) {
+                for (let i = 0; i < rows.length; i++) {
+                  const row = rows[i];
                   const isGrandTotal = isGrandTotalRow(row);
                   const totalLabelRow = isTotalRow(row);
                   const nonNumericEmpty = isNonNumericEmpty(row);
@@ -1381,16 +1441,16 @@ export default function Stage4() {
                     if (totalSep) {
                       sepRun = 1;
                       lastWasTotalSep = true;
-                      filteredRows.push(row);
+                      filteredRows.push({ row, originalIndex: i + 1 }); // +1 because data[0] is headers
                     } else {
                       // blank separator
                       if (lastWasTotalSep && sepRun === 1) {
                         sepRun = 2; // allow only one blank after totals row
-                        filteredRows.push(row);
+                        filteredRows.push({ row, originalIndex: i + 1 });
                       } else if (!lastWasTotalSep && sepRun < 1) {
                         // In rare cases of stray blanks without preceding totals, allow a single blank
                         sepRun = 1;
-                        filteredRows.push(row);
+                        filteredRows.push({ row, originalIndex: i + 1 });
                       }
                       // else skip extra blanks
                     }
@@ -1398,11 +1458,11 @@ export default function Stage4() {
                     // reset streak when non-separator row encountered
                     sepRun = 0;
                     lastWasTotalSep = false;
-                    filteredRows.push(row);
+                    filteredRows.push({ row, originalIndex: i + 1 });
                   }
                 }
 
-                return filteredRows.map((row: any[], rowIdx: number) => {
+                return filteredRows.map(({ row, originalIndex }, rowIdx: number) => {
                   const isGrandTotal = isGrandTotalRow(row);
                   const isTotal = isTotalRow(row);
 
@@ -1412,6 +1472,10 @@ export default function Stage4() {
 
                   const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
                   const isSecondSeparatorRow = nonNumericEmpty && !debitPresent && !creditPresent && !isTotal && !isGrandTotal;
+
+                  // Check if this row is pending removal or should flash
+                  const isPendingRemoval = pendingRemovals.has(originalIndex);
+                  const shouldFlash = flashRows.has(originalIndex);
 
                   // Calculate arrears for total separator rows: read pre-formatted value
                   let calculatedArrears = 0;
@@ -1437,6 +1501,9 @@ export default function Stage4() {
                         ${isTotal && !isGrandTotal ? "bg-blue-50 dark:bg-blue-950/20 font-extrabold" : ""}
                         ${isTotalSeparatorRow ? "bg-blue-50 dark:bg-blue-950/20 font-extrabold border-t-2 border-b-2" : ""}
                         ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 border-t-[3px] border-b-[3px] font-extrabold" : ""}
+                        ${isPendingRemoval ? "opacity-50 line-through bg-destructive/10" : ""}
+                        ${shouldFlash ? "animate-pulse bg-success/20" : ""}
+                        transition-all duration-300
                       `}
                       style={(isGrandTotal || isTotalSeparatorRow || isTotal) ? { borderColor: 'black' } : {}}
                     >
@@ -1734,21 +1801,71 @@ export default function Stage4() {
             <Badge variant={reviewMode ? 'secondary' : 'default'}>
               {reviewMode ? 'Safe Preview' : 'Removal Enabled'}
             </Badge>
+            
+            <Separator orientation="vertical" className="h-6" />
+            
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="auto-update"
+                checked={autoUpdate}
+                onCheckedChange={(checked) => setAutoUpdate(checked as boolean)}
+              />
+              <label
+                htmlFor="auto-update"
+                className="text-sm font-medium cursor-pointer"
+              >
+                Auto-Update Sheet
+              </label>
+            </div>
+            <Badge variant={autoUpdate ? 'default' : 'secondary'}>
+              {autoUpdate ? 'Instant Update' : 'Manual Apply'}
+            </Badge>
           </div>
+
+          {pendingRemovals.size > 0 && (
+            <Alert variant="default" className="bg-amber-50 border-amber-200">
+              <AlertCircle className="h-4 w-4 text-amber-600" />
+              <AlertDescription className="text-amber-800">
+                <strong>{pendingRemovals.size} entries</strong> marked for removal. 
+                Click <strong>"Apply Changes"</strong> to update the sheet.
+              </AlertDescription>
+            </Alert>
+          )}
 
           <div className="flex flex-wrap gap-2">
             <Button onClick={analyzeDebitLinkage} variant="default">
               <CheckCircle2 className="mr-2 h-4 w-4" />
               Analyze Debit Linkage
             </Button>
-            <Button 
-              onClick={removeSelectedDebitFamilies} 
-              variant="destructive"
-              disabled={!linkageAnalyzed || debitFamilies.filter(f => f.selected).length === 0}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Remove Selected ({debitFamilies.filter(f => f.selected).length})
-            </Button>
+            
+            {pendingRemovals.size === 0 ? (
+              <Button 
+                onClick={removeSelectedDebitFamilies} 
+                variant="destructive"
+                disabled={!linkageAnalyzed || debitFamilies.filter(f => f.selected).length === 0}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                {autoUpdate ? 'Remove Selected' : 'Mark for Removal'} ({debitFamilies.filter(f => f.selected).length})
+              </Button>
+            ) : (
+              <>
+                <Button 
+                  onClick={applyPendingRemovals} 
+                  variant="default"
+                  className="bg-success hover:bg-success/90"
+                >
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  Apply Changes ({pendingRemovals.size})
+                </Button>
+                <Button 
+                  onClick={cancelPendingRemovals} 
+                  variant="outline"
+                >
+                  Cancel Pending
+                </Button>
+              </>
+            )}
+            
             <Button 
               onClick={selectAllFamilies}
               variant="outline"
