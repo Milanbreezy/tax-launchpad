@@ -1279,16 +1279,19 @@ export default function Stage4() {
             }, 0);
             const groupArrearsTotal = groupDebitTotal - groupCreditTotal;
 
-            // Create totals row (first separator) - arrears calculated here
-            const totalsRow = headers.map(() => '');
-            totalsRow[debitIdx] = formatCurrency(groupDebitTotal);
-            totalsRow[creditIdx] = formatCurrency(groupCreditTotal);
-            totalsRow[arrearsIdx] = formatCurrency(groupArrearsTotal); // Display as 0.00 if zero
-            result.push(totalsRow);
+            // Only add totals row if arrears is NOT zero (preserve zero arrears removal)
+            if (groupArrearsTotal !== 0) {
+              // Create totals row (first separator) - arrears calculated here
+              const totalsRow = headers.map(() => '');
+              totalsRow[debitIdx] = formatCurrency(groupDebitTotal);
+              totalsRow[creditIdx] = formatCurrency(groupCreditTotal);
+              totalsRow[arrearsIdx] = formatCurrency(groupArrearsTotal);
+              result.push(totalsRow);
 
-            // Create blank row (second separator)
-            const blankRow = headers.map(() => '');
-            result.push(blankRow);
+              // Create blank row (second separator)
+              const blankRow = headers.map(() => '');
+              result.push(blankRow);
+            }
           }
 
           // Start new group
@@ -1322,15 +1325,18 @@ export default function Stage4() {
       }, 0);
       const groupArrearsTotal = groupDebitTotal - groupCreditTotal;
 
-      // Create totals row with formatted values and arrears calculated
-      const totalsRow = headers.map(() => '');
-      totalsRow[debitIdx] = formatCurrency(groupDebitTotal);
-      totalsRow[creditIdx] = formatCurrency(groupCreditTotal);
-      totalsRow[arrearsIdx] = formatCurrency(groupArrearsTotal); // Display as 0.00 if zero
-      result.push(totalsRow);
+      // Only add totals row if arrears is NOT zero (preserve zero arrears removal)
+      if (groupArrearsTotal !== 0) {
+        // Create totals row with formatted values and arrears calculated
+        const totalsRow = headers.map(() => '');
+        totalsRow[debitIdx] = formatCurrency(groupDebitTotal);
+        totalsRow[creditIdx] = formatCurrency(groupCreditTotal);
+        totalsRow[arrearsIdx] = formatCurrency(groupArrearsTotal);
+        result.push(totalsRow);
 
-      const blankRow = headers.map(() => '');
-      result.push(blankRow);
+        const blankRow = headers.map(() => '');
+        result.push(blankRow);
+      }
     }
 
     // Append GRAND TOTAL rows at the very end
