@@ -354,8 +354,9 @@ export default function Stage4() {
       }
     }
 
-    // Normalize separators to at most two rows (totals row + one blank)
-    const compressed = compressSeparatorRows(newData);
+    // Recalculate group totals and normalize separators
+    const withRecalculatedTotals = recalculateGroupTotals(newData);
+    const compressed = compressSeparatorRows(withRecalculatedTotals);
 
     // Recalculate stats once after removal
     const stats = calculateRemainingStatistics(compressed);
@@ -370,7 +371,7 @@ export default function Stage4() {
 
     toast({
       title: '✅ Zero Arrear Entries Removed',
-      description: `Removed ${removed} rows with Arrears = 0. Format normalized (max two separators). Totals updated.`,
+      description: `Removed ${removed} rows with Arrears = 0. Group totals recalculated, exact two-row separation maintained.`,
       duration: 4000,
     });
   };
@@ -443,22 +444,26 @@ export default function Stage4() {
       }
     }
     
-    setData(newData);
+    // Recalculate group totals and normalize format
+    const withRecalculatedTotals = recalculateGroupTotals(newData);
+    const compressed = compressSeparatorRows(withRecalculatedTotals);
+
+    setData(compressed);
     setRemovedCount(removedCount + removed);
     
     // Recalculate remaining statistics
-    const stats = calculateRemainingStatistics(newData);
+    const stats = calculateRemainingStatistics(compressed);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
     
-    analyzeTaxTypes(newData);
-    analyzeCaseTypes(newData);
+    analyzeTaxTypes(compressed);
+    analyzeCaseTypes(compressed);
     
-    localStorage.setItem("stage_one_cleaned_data", JSON.stringify(newData));
+    localStorage.setItem("stage_one_cleaned_data", JSON.stringify(compressed));
     
     toast({ 
       title: "✅ Tax Type Filter Applied", 
-      description: `Removed ${removed} rows — arrears recalculated` 
+      description: `Removed ${removed} rows. Group totals recalculated, format preserved (two-row separation intact).` 
     });
   };
 
@@ -493,22 +498,26 @@ export default function Stage4() {
       }
     }
     
-    setData(newData);
+    // Recalculate group totals and normalize format
+    const withRecalculatedTotals = recalculateGroupTotals(newData);
+    const compressed = compressSeparatorRows(withRecalculatedTotals);
+
+    setData(compressed);
     setRemovedCount(removedCount + removed);
     
     // Recalculate remaining statistics
-    const stats = calculateRemainingStatistics(newData);
+    const stats = calculateRemainingStatistics(compressed);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
     
-    analyzeTaxTypes(newData);
-    analyzeCaseTypes(newData);
+    analyzeTaxTypes(compressed);
+    analyzeCaseTypes(compressed);
     
-    localStorage.setItem("stage_one_cleaned_data", JSON.stringify(newData));
+    localStorage.setItem("stage_one_cleaned_data", JSON.stringify(compressed));
     
     toast({ 
       title: "✅ Case Type Filter Applied", 
-      description: `Removed ${removed} rows — arrears recalculated` 
+      description: `Removed ${removed} rows. Group totals recalculated, format preserved (two-row separation intact).` 
     });
   };
 
@@ -537,12 +546,120 @@ export default function Stage4() {
     });
   };
 
-  // Compress separator rows to keep at most two: totals row + one blank row
+  // Recalculate group totals after removals
+  const recalculateGroupTotals = (dataArray: any[]): any[] => {
+    if (dataArray.length === 0) return dataArray;
+    
+    const headers = dataArray[0] as string[];
+    const debitIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount');
+    const creditIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount');
+    const arrearsIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'arrears');
+    const taxTypeIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'tax type');
+    const payrollYearIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'payroll year');
+
+    if (debitIdx === -1 || creditIdx === -1 || arrearsIdx === -1 || taxTypeIdx === -1 || payrollYearIdx === -1) {
+      return dataArray;
+    }
+
+    const result: any[] = [headers];
+    let currentGroup: any[] = [];
+    let currentTaxType = '';
+    let currentPayrollYear = '';
+
+    for (let i = 1; i < dataArray.length; i++) {
+      const row = dataArray[i];
+      const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
+      const debitPresent = row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
+      const creditPresent = row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
+      const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+      const isBlankSeparatorRow = nonNumericEmpty && !debitPresent && !creditPresent && !isTotalRow(row);
+      
+      // Check if this is a data row (not empty, not total label)
+      const isDataRow = !isEmptyRow(row) && !isTotalRow(row) && !nonNumericEmpty;
+
+      if (isDataRow) {
+        const rowTaxType = row[taxTypeIdx]?.toString().trim() || '';
+        const rowPayrollYear = row[payrollYearIdx]?.toString().trim() || '';
+
+        // Check if we're starting a new group
+        if (currentTaxType !== rowTaxType || currentPayrollYear !== rowPayrollYear) {
+          // Flush previous group with totals
+          if (currentGroup.length > 0) {
+            result.push(...currentGroup);
+            
+            // Calculate and add group totals
+            const groupDebitTotal = currentGroup.reduce((sum, r) => {
+              const val = parseFloat(String(r[debitIdx] || 0).replace(/,/g, '')) || 0;
+              return sum + val;
+            }, 0);
+            const groupCreditTotal = currentGroup.reduce((sum, r) => {
+              const val = parseFloat(String(r[creditIdx] || 0).replace(/,/g, '')) || 0;
+              return sum + val;
+            }, 0);
+            const groupArrearsTotal = groupDebitTotal - groupCreditTotal;
+
+            // Create totals row (first separator)
+            const totalsRow = headers.map(() => '');
+            totalsRow[debitIdx] = String(groupDebitTotal);
+            totalsRow[creditIdx] = String(groupCreditTotal);
+            totalsRow[arrearsIdx] = String(groupArrearsTotal);
+            result.push(totalsRow);
+
+            // Create blank row (second separator)
+            const blankRow = headers.map(() => '');
+            result.push(blankRow);
+          }
+
+          // Start new group
+          currentGroup = [row];
+          currentTaxType = rowTaxType;
+          currentPayrollYear = rowPayrollYear;
+        } else {
+          // Continue current group
+          currentGroup.push(row);
+        }
+      } else if (isTotalSeparatorRow || isBlankSeparatorRow) {
+        // Skip old separators - we'll regenerate them
+        continue;
+      } else {
+        // Keep other special rows (like GRAND TOTAL label rows)
+        result.push(row);
+      }
+    }
+
+    // Flush final group
+    if (currentGroup.length > 0) {
+      result.push(...currentGroup);
+      
+      const groupDebitTotal = currentGroup.reduce((sum, r) => {
+        const val = parseFloat(String(r[debitIdx] || 0).replace(/,/g, '')) || 0;
+        return sum + val;
+      }, 0);
+      const groupCreditTotal = currentGroup.reduce((sum, r) => {
+        const val = parseFloat(String(r[creditIdx] || 0).replace(/,/g, '')) || 0;
+        return sum + val;
+      }, 0);
+      const groupArrearsTotal = groupDebitTotal - groupCreditTotal;
+
+      const totalsRow = headers.map(() => '');
+      totalsRow[debitIdx] = String(groupDebitTotal);
+      totalsRow[creditIdx] = String(groupCreditTotal);
+      totalsRow[arrearsIdx] = String(groupArrearsTotal);
+      result.push(totalsRow);
+
+      const blankRow = headers.map(() => '');
+      result.push(blankRow);
+    }
+
+    return result;
+  };
+
+  // Compress separator rows to keep exactly two: totals row + one blank row
   const compressSeparatorRows = (dataArray: any[]): any[] => {
     if (dataArray.length === 0) return dataArray;
     const headers = dataArray[0] as string[];
-    const debitIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount'.toLowerCase());
-    const creditIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount'.toLowerCase());
+    const debitIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount');
+    const creditIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount');
 
     const result: any[] = [headers];
     let sepRun = 0;
@@ -566,7 +683,7 @@ export default function Stage4() {
         result.push(row);
       } else if (isBlankSeparatorRow) {
         if (lastWasTotalSep && sepRun === 1) {
-          // Insert a normalized completely blank row as the second separator
+          // Insert exactly one normalized blank row as the second separator
           const blankRow = headers.map(() => '');
           result.push(blankRow);
           sepRun = 2;
