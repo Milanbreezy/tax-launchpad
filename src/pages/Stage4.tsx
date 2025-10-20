@@ -2048,16 +2048,17 @@ export default function Stage4() {
                     View All Entries Details
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-7xl max-h-[90vh] overflow-hidden flex flex-col">
+                <DialogContent className="max-w-7xl h-[90vh] overflow-hidden flex flex-col">
                   <DialogHeader>
                     <DialogTitle>Debit Linkage Validation - Complete Entry Details</DialogTitle>
                     <DialogDescription>
-                      Review all entries categorized by validation status (expand/collapse sections to view)
+                      Review all entries categorized by validation status. Expand sections and scroll to view all details.
                     </DialogDescription>
                   </DialogHeader>
                   
-                  <ScrollArea className="flex-1 pr-4">
-                    <div className="space-y-6">
+                  <div className="flex-1 overflow-hidden">
+                    <ScrollArea className="h-full pr-4">
+                      <div className="space-y-6 pb-4">
                       {/* Valid Entries Section */}
                       <Collapsible defaultOpen className="border-2 border-success rounded-lg">
                         <div className="bg-success/10 p-4">
@@ -2196,8 +2197,9 @@ export default function Stage4() {
                           </div>
                         </CollapsibleContent>
                       </Collapsible>
-                    </div>
-                  </ScrollArea>
+                      </div>
+                    </ScrollArea>
+                  </div>
                 </DialogContent>
               </Dialog>
             )}
