@@ -602,63 +602,9 @@ export default function Stage4() {
       if (Math.abs(a) < 0.01 || (Math.abs(d) < 0.01 && Math.abs(c) < 0.01)) rowsToRemove.add(idx);
     }
 
-    // B) Full offset by Debit Number (sum Debit == sum Credit for same Debit No)
-    const byDebitNo = new Map<string, number[]>();
-    for (const { idx, row } of candidates) {
-      const dn = debitNoIdx !== -1 ? String(row[debitNoIdx] || '').trim() : '';
-      if (!dn || dn === '–' || dn === '-') continue;
-      if (!byDebitNo.has(dn)) byDebitNo.set(dn, []);
-      byDebitNo.get(dn)!.push(idx);
-    }
-    for (const idxs of byDebitNo.values()) {
-      let sumD = 0, sumC = 0;
-      for (const i of idxs) {
-        const r = recalculated[i];
-        sumD += parseFloat(String(r[debitIdx] || 0).replace(/,/g, '')) || 0;
-        sumC += parseFloat(String(r[creditIdx] || 0).replace(/,/g, '')) || 0;
-      }
-      if (Math.abs(sumD - sumC) < 0.01 && Math.max(sumD, sumC) > 0) idxs.forEach(i => rowsToRemove.add(i));
-    }
+    // Note: For "Remove ALL Zero Arrears", we only remove per-row zero balances.
+    // We intentionally do NOT perform cross-row offset matching here to avoid accidental deletions.
 
-    // C) Implicit match (at least one missing Debit No) within ±31 days and same Tax/Year/Case
-    for (let i = 0; i < candidates.length; i++) {
-      if (rowsToRemove.has(candidates[i].idx)) continue;
-      const r1 = candidates[i].row;
-      const dn1 = debitNoIdx !== -1 ? String(r1[debitNoIdx] || '').trim() : '';
-      const missing1 = !dn1 || dn1 === '–' || dn1 === '-';
-      if (!missing1) continue;
-
-      const d1 = parseFloat(String(r1[debitIdx] || 0).replace(/,/g, '')) || 0;
-      const c1 = parseFloat(String(r1[creditIdx] || 0).replace(/,/g, '')) || 0;
-
-      for (let j = i + 1; j < candidates.length; j++) {
-        if (rowsToRemove.has(candidates[j].idx)) continue;
-        const r2 = candidates[j].row;
-        const dn2 = debitNoIdx !== -1 ? String(r2[debitNoIdx] || '').trim() : '';
-        const missing2 = !dn2 || dn2 === '–' || dn2 === '-';
-        if (!missing1 && !missing2) continue;
-
-        const d2 = parseFloat(String(r2[debitIdx] || 0).replace(/,/g, '')) || 0;
-        const c2 = parseFloat(String(r2[creditIdx] || 0).replace(/,/g, '')) || 0;
-
-        const totalsOffset = Math.abs((d1 + d2) - (c1 + c2)) < 0.01 && Math.abs(d1 + d2) > 0.01;
-        if (totalsOffset) {
-          const tt1 = taxTypeIdx !== -1 ? String(r1[taxTypeIdx] || '').trim().toLowerCase() : '';
-          const tt2 = taxTypeIdx !== -1 ? String(r2[taxTypeIdx] || '').trim().toLowerCase() : '';
-          const py1 = payrollYearIdx !== -1 ? String(r1[payrollYearIdx] || '').trim() : '';
-          const py2 = payrollYearIdx !== -1 ? String(r2[payrollYearIdx] || '').trim() : '';
-          const ct1 = caseTypeIdx !== -1 ? String(r1[caseTypeIdx] || '').trim().toLowerCase() : '';
-          const ct2 = caseTypeIdx !== -1 ? String(r2[caseTypeIdx] || '').trim().toLowerCase() : '';
-          const vd1 = valueDateIdx !== -1 ? String(r1[valueDateIdx] || '').trim() : '';
-          const vd2 = valueDateIdx !== -1 ? String(r2[valueDateIdx] || '').trim() : '';
-          const dateMatch = daysDifference(vd1, vd2) <= 31;
-          if (tt1 === tt2 && py1 === py2 && ct1 === ct2 && dateMatch) {
-            rowsToRemove.add(candidates[i].idx);
-            rowsToRemove.add(candidates[j].idx);
-          }
-        }
-      }
-    }
 
     // Build new data array
     const newData: any[] = [headers];
@@ -693,7 +639,7 @@ export default function Stage4() {
 
     toast({
       title: '🧹 Zero Arrears Removed',
-      description: `Removed ${removed} zero-arrears and offsetting rows. Group totals recalculated; GRAND TOTAL stays at the bottom.`,
+      description: `Removed ${removed} zero-arrears rows. Totals recalculated; GRAND TOTAL pinned at bottom. Data row order preserved.`,
       duration: 5000,
     });
   };
@@ -1175,9 +1121,11 @@ export default function Stage4() {
                         else if (isArrearsCol && isTotalSeparatorRow) {
                           displayValue = formatCurrency(calculatedArrears);
                         }
-                        // Hide arrears for regular data rows (only show in total rows)
-                        else if (isArrearsCol && !(isTotalSeparatorRow || isGrandTotal || isTotal)) {
-                          displayValue = '';
+                        // Arrears column: ALWAYS show Debit - Credit for all other rows (including zeros)
+                        else if (isArrearsCol) {
+                          const dVal = debitIndex !== -1 ? (parseFloat(String(row[debitIndex] ?? '').toString().replace(/,/g, '')) || 0) : 0;
+                          const cVal = creditIndex !== -1 ? (parseFloat(String(row[creditIndex] ?? '').toString().replace(/,/g, '')) || 0) : 0;
+                          displayValue = formatCurrency(dVal - cVal);
                         }
                         // Format numeric columns
                         else if (isNumeric) {
