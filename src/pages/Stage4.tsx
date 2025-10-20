@@ -36,6 +36,7 @@ interface DebitFamily {
   reason: string;
   suggestion: 'KEEP' | 'REMOVE';
   selected: boolean;
+  isOrphaned?: boolean; // For entries without debit numbers
 }
 
 interface FamilyEntry {
@@ -907,6 +908,7 @@ export default function Stage4() {
 
     // Group entries by Debit No + Tax Type + Payroll Year + Period
     const familyMap = new Map<string, FamilyEntry[]>();
+    const orphanedEntries: Array<{ taxType: string; payrollYear: string; period: string; entry: FamilyEntry }> = [];
 
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
@@ -924,18 +926,42 @@ export default function Stage4() {
       const period = periodIdx !== -1 ? String(row[periodIdx] || '').trim() : '';
       const caseType = String(row[caseTypeIdx] || '').trim();
 
-      // Skip if debit number is missing or placeholder
-      if (!debitNo || debitNo === '–' || debitNo === '-' || debitNo === '0') continue;
+      const debitAmt = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
+      const creditAmt = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
+      const arrears = debitAmt - creditAmt;
+
+      // CRITICAL: Check for orphaned entries (no debit number but has credit amount)
+      const hasNoDebitNo = !debitNo || debitNo === '–' || debitNo === '-' || debitNo === '0';
+      const hasNoDebitAmount = debitAmt === 0;
+      const hasCreditAmount = creditAmt > 0;
+
+      if (hasNoDebitNo && hasNoDebitAmount && hasCreditAmount) {
+        // This is an orphaned credit entry - no linkage possible
+        orphanedEntries.push({
+          taxType,
+          payrollYear,
+          period,
+          entry: {
+            rowIndex: i,
+            caseType,
+            debitAmount: debitAmt,
+            creditAmount: creditAmt,
+            arrears,
+            valueDate: valueDateIdx !== -1 ? String(row[valueDateIdx] || '') : '',
+            category: classifyCaseType(caseType)
+          }
+        });
+        continue;
+      }
+
+      // Skip other entries without valid debit numbers
+      if (hasNoDebitNo) continue;
 
       const key = `${debitNo}||${taxType}||${payrollYear}||${period}`;
 
       if (!familyMap.has(key)) {
         familyMap.set(key, []);
       }
-
-      const debitAmt = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
-      const creditAmt = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
-      const arrears = debitAmt - creditAmt;
 
       familyMap.get(key)!.push({
         rowIndex: i,
@@ -1017,13 +1043,31 @@ export default function Stage4() {
         isValid,
         reason,
         suggestion,
-        selected: !isValid // Auto-select invalid families for removal
+        selected: !isValid, // Auto-select invalid families for removal
+        isOrphaned: false
       });
     }
 
-    // Sort: invalid first, then by debit number
+    // Add orphaned entries as separate families
+    orphanedEntries.forEach(({ taxType, payrollYear, period, entry }) => {
+      families.push({
+        debitNo: 'NO DEBIT NUMBER',
+        taxType,
+        payrollYear,
+        period,
+        entries: [entry],
+        isValid: false,
+        reason: 'Orphaned credit entry - No debit number, no debit amount, only credit amount. Cannot link to any core liability.',
+        suggestion: 'REMOVE',
+        selected: true, // Auto-select for removal
+        isOrphaned: true
+      });
+    });
+
+    // Sort: invalid first (orphaned first, then others), then by debit number
     families.sort((a, b) => {
       if (a.isValid !== b.isValid) return a.isValid ? 1 : -1;
+      if (a.isOrphaned !== b.isOrphaned) return a.isOrphaned ? -1 : 1;
       return a.debitNo.localeCompare(b.debitNo);
     });
 
@@ -1033,10 +1077,11 @@ export default function Stage4() {
 
     const validCount = families.filter(f => f.isValid).length;
     const invalidCount = families.filter(f => !f.isValid).length;
+    const orphanedCount = families.filter(f => f.isOrphaned).length;
 
     toast({
       title: "✅ Debit Linkage Analysis Complete",
-      description: `Found ${families.length} transaction families: ${validCount} valid (keep), ${invalidCount} invalid (remove). Review and select families to process.`,
+      description: `Found ${families.length} transaction families: ${validCount} valid (keep), ${invalidCount} invalid (${orphanedCount} orphaned credits). Review and select to process.`,
       duration: 3000
     });
   };
@@ -1851,11 +1896,12 @@ export default function Stage4() {
                 <li><strong>Core Liabilities:</strong> Final Original, Provisional Original, Additional Assessment, Audit</li>
                 <li><strong>Valid Family (2+ entries):</strong> Must contain at least one Core Liability + Settlement/Penalty</li>
                 <li><strong>Valid Single:</strong> Standalone Core Liability assessments are valid</li>
+                <li><strong>Orphaned Credits:</strong> Entries with NO debit number + NO debit amount + ONLY credit amount → Remove (cannot link)</li>
                 <li><strong>Invalid (Remove):</strong> Orphaned settlements, standalone penalties, families without core</li>
                 <li><strong>Grouping:</strong> By Debit No + Tax Type + Payroll Year + Period</li>
               </ul>
               <p className="mt-2 text-xs text-muted-foreground">
-                Entries without valid debit numbers are excluded from this analysis.
+                All entries are analyzed. Scroll through results to review all suggested removals and kept entries.
               </p>
             </AlertDescription>
           </Alert>
@@ -2066,45 +2112,52 @@ export default function Stage4() {
                 </h3>
                 <ScrollArea className="max-h-[300px]">
                   <div className="space-y-2">
-                    {debitFamilies.filter(f => !f.isValid).map((family, idx) => (
-                      <div key={idx} className="p-3 rounded border bg-background">
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="flex items-center gap-2 flex-1">
-                            <Checkbox
-                              checked={family.selected}
-                              onCheckedChange={() => toggleFamilySelection(family.debitNo)}
-                            />
-                            <div className="flex-1">
-                              <div className="font-semibold text-sm">
-                                Debit No: {family.debitNo}
-                              </div>
-                              <div className="text-xs text-muted-foreground">
-                                {family.taxType} | Year: {family.payrollYear} | Period: {family.period || 'N/A'}
-                              </div>
-                            </div>
-                          </div>
-                          <Badge variant="destructive">REMOVE</Badge>
-                        </div>
-                        
-                        <div className="text-xs mb-2 text-destructive italic font-medium">
-                          ⚠️ {family.reason}
-                        </div>
+                     {debitFamilies.filter(f => !f.isValid).map((family, idx) => (
+                       <div key={idx} className={`p-3 rounded border ${family.isOrphaned ? 'border-destructive/50 bg-destructive/10' : 'bg-background'}`}>
+                         <div className="flex items-start justify-between mb-2">
+                           <div className="flex items-center gap-2 flex-1">
+                             <Checkbox
+                               checked={family.selected}
+                               onCheckedChange={() => toggleFamilySelection(family.debitNo)}
+                             />
+                             <div className="flex-1">
+                               <div className="font-semibold text-sm flex items-center gap-2">
+                                 {family.isOrphaned ? (
+                                   <>
+                                     <Badge variant="destructive" className="text-xs">⚠️ ORPHANED CREDIT</Badge>
+                                     <span className="text-destructive">NO DEBIT NUMBER</span>
+                                   </>
+                                 ) : (
+                                   <>Debit No: {family.debitNo}</>
+                                 )}
+                               </div>
+                               <div className="text-xs text-muted-foreground">
+                                 {family.taxType} | Year: {family.payrollYear} | Period: {family.period || 'N/A'}
+                               </div>
+                             </div>
+                           </div>
+                           <Badge variant="destructive">REMOVE</Badge>
+                         </div>
+                         
+                         <div className={`text-xs mb-2 italic font-medium ${family.isOrphaned ? 'text-destructive' : 'text-destructive'}`}>
+                           ⚠️ {family.reason}
+                         </div>
 
-                        <div className="space-y-1">
-                          {family.entries.map((entry, entryIdx) => (
-                            <div key={entryIdx} className="flex items-center gap-2 text-xs p-2 bg-muted/50 rounded">
-                              <Badge variant="outline" className="text-xs font-semibold">
-                                {entry.category}
-                              </Badge>
-                              <span className="flex-1">{entry.caseType}</span>
-                              <span className="text-muted-foreground tabular-nums">
-                                D: {formatCurrency(entry.debitAmount)} | C: {formatCurrency(entry.creditAmount)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                         <div className="space-y-1">
+                           {family.entries.map((entry, entryIdx) => (
+                             <div key={entryIdx} className="flex items-center gap-2 text-xs p-2 bg-muted/50 rounded">
+                               <Badge variant="outline" className="text-xs font-semibold">
+                                 {entry.category}
+                               </Badge>
+                               <span className="flex-1">{entry.caseType}</span>
+                               <span className="text-muted-foreground tabular-nums">
+                                 D: {formatCurrency(entry.debitAmount)} | C: {formatCurrency(entry.creditAmount)}
+                               </span>
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                     ))}
                   </div>
                 </ScrollArea>
               </div>
