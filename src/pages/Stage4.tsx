@@ -26,6 +26,27 @@ interface CaseTypeSummary {
   selected: boolean;
 }
 
+interface DebitFamily {
+  debitNo: string;
+  taxType: string;
+  payrollYear: string;
+  period: string;
+  entries: FamilyEntry[];
+  isValid: boolean;
+  reason: string;
+  suggestion: 'KEEP' | 'REMOVE';
+}
+
+interface FamilyEntry {
+  rowIndex: number;
+  caseType: string;
+  debitAmount: number;
+  creditAmount: number;
+  arrears: number;
+  valueDate: string;
+  category: 'Core' | 'Adjustment' | 'Settlement' | 'Penalty' | 'Misc';
+}
+
 export default function Stage4() {
   const navigate = useNavigate();
   const [data, setData] = useState<any[]>([]);
@@ -45,6 +66,11 @@ export default function Stage4() {
   const [taxTypeExpanded, setTaxTypeExpanded] = useState(false);
   const [caseTypeExpanded, setCaseTypeExpanded] = useState(false);
   const [lastSnapshot, setLastSnapshot] = useState<any[] | null>(null);
+  
+  // Debit Linkage Validation
+  const [debitFamilies, setDebitFamilies] = useState<DebitFamily[]>([]);
+  const [linkageExpanded, setLinkageExpanded] = useState(false);
+  const [linkageAnalyzed, setLinkageAnalyzed] = useState(false);
   useEffect(() => {
     loadData();
   }, []);
@@ -811,6 +837,257 @@ export default function Stage4() {
     });
   };
 
+  // Classify case type into category
+  const classifyCaseType = (caseType: string): 'Core' | 'Adjustment' | 'Settlement' | 'Penalty' | 'Misc' => {
+    const normalized = caseType.toLowerCase().trim();
+    
+    // Core Liability Entries
+    if (normalized.includes('final original') || normalized.includes('provisional original') || 
+        normalized.includes('additional assessment') || normalized.includes('audit')) {
+      return 'Core';
+    }
+    
+    // Adjustment Entries
+    if (normalized.includes('provisional amended') || normalized.includes('arrears') || 
+        normalized.includes('enforcement')) {
+      return 'Adjustment';
+    }
+    
+    // Settlement Entries
+    if (normalized.includes('discharge') || normalized.includes('regular payment')) {
+      return 'Settlement';
+    }
+    
+    // Penalty & Charges
+    if (normalized.includes('fine') || normalized.includes('penalt') || 
+        normalized.includes('interest') || normalized.includes('late submission')) {
+      return 'Penalty';
+    }
+    
+    // Miscellaneous
+    return 'Misc';
+  };
+
+  // Analyze Debit Linkage
+  const analyzeDebitLinkage = () => {
+    if (data.length === 0) {
+      toast({ title: "No Data", description: "Please import data first", variant: "destructive" });
+      return;
+    }
+
+    const headers = data[0] as string[];
+    const debitNoIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'debit no');
+    const taxTypeIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'tax type');
+    const payrollYearIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'payroll year');
+    const periodIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'period');
+    const caseTypeIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'case type');
+    const debitIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'debit amount');
+    const creditIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'credit amount');
+    const valueDateIdx = headers.findIndex(h => h?.toLowerCase().trim() === 'value date');
+
+    if (debitNoIdx === -1 || taxTypeIdx === -1 || payrollYearIdx === -1 || caseTypeIdx === -1) {
+      toast({ title: "Columns Not Found", description: "Required columns missing", variant: "destructive" });
+      return;
+    }
+
+    // Group entries by Debit No + Tax Type + Payroll Year + Period
+    const familyMap = new Map<string, FamilyEntry[]>();
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      if (isEmptyRow(row) || isTotalRow(row) || isGrandTotalRow(row)) continue;
+
+      const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
+      const debitPresent = debitIdx !== -1 && row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
+      const creditPresent = creditIdx !== -1 && row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
+      const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+      if (isTotalSeparatorRow) continue;
+
+      const debitNo = String(row[debitNoIdx] || '').trim();
+      const taxType = String(row[taxTypeIdx] || '').trim();
+      const payrollYear = String(row[payrollYearIdx] || '').trim();
+      const period = periodIdx !== -1 ? String(row[periodIdx] || '').trim() : '';
+      const caseType = String(row[caseTypeIdx] || '').trim();
+
+      // Skip if debit number is missing or placeholder
+      if (!debitNo || debitNo === '–' || debitNo === '-' || debitNo === '0') continue;
+
+      const key = `${debitNo}||${taxType}||${payrollYear}||${period}`;
+
+      if (!familyMap.has(key)) {
+        familyMap.set(key, []);
+      }
+
+      const debitAmt = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
+      const creditAmt = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
+      const arrears = debitAmt - creditAmt;
+
+      familyMap.get(key)!.push({
+        rowIndex: i,
+        caseType,
+        debitAmount: debitAmt,
+        creditAmount: creditAmt,
+        arrears,
+        valueDate: valueDateIdx !== -1 ? String(row[valueDateIdx] || '') : '',
+        category: classifyCaseType(caseType)
+      });
+    }
+
+    // Analyze each family
+    const families: DebitFamily[] = [];
+
+    for (const [key, entries] of familyMap.entries()) {
+      const [debitNo, taxType, payrollYear, period] = key.split('||');
+
+      // Check if family has at least one core liability
+      const hasCoreEntry = entries.some(e => e.category === 'Core');
+      
+      // Check family size
+      const isSingleEntry = entries.length === 1;
+      
+      // Check if it's only settlement entries without core
+      const onlySettlements = entries.every(e => e.category === 'Settlement') && !hasCoreEntry;
+      
+      // Check if it's only penalties without core
+      const onlyPenalties = entries.every(e => e.category === 'Penalty') && !hasCoreEntry;
+
+      let isValid = false;
+      let reason = '';
+      let suggestion: 'KEEP' | 'REMOVE' = 'REMOVE';
+
+      if (isSingleEntry) {
+        const entry = entries[0];
+        if (entry.category === 'Core') {
+          isValid = true;
+          reason = 'Single core liability entry - valid standalone';
+          suggestion = 'KEEP';
+        } else if (entry.category === 'Settlement') {
+          isValid = false;
+          reason = 'Orphaned settlement (discharge/payment) - no matching debit';
+          suggestion = 'REMOVE';
+        } else if (entry.category === 'Penalty') {
+          isValid = false;
+          reason = 'Orphaned penalty - no matching core liability';
+          suggestion = 'REMOVE';
+        } else {
+          isValid = false;
+          reason = `Single ${entry.category} entry - no core liability`;
+          suggestion = 'REMOVE';
+        }
+      } else {
+        // Multiple entries
+        if (hasCoreEntry) {
+          isValid = true;
+          reason = `Valid family with ${entries.length} entries (includes core liability)`;
+          suggestion = 'KEEP';
+        } else if (onlySettlements) {
+          isValid = false;
+          reason = 'Only settlement entries - no core liability to settle';
+          suggestion = 'REMOVE';
+        } else if (onlyPenalties) {
+          isValid = false;
+          reason = 'Only penalties - no core liability attached';
+          suggestion = 'REMOVE';
+        } else {
+          isValid = false;
+          reason = `No core liability found in family (${entries.length} entries)`;
+          suggestion = 'REMOVE';
+        }
+      }
+
+      families.push({
+        debitNo,
+        taxType,
+        payrollYear,
+        period,
+        entries,
+        isValid,
+        reason,
+        suggestion
+      });
+    }
+
+    // Sort: invalid first, then by debit number
+    families.sort((a, b) => {
+      if (a.isValid !== b.isValid) return a.isValid ? 1 : -1;
+      return a.debitNo.localeCompare(b.debitNo);
+    });
+
+    setDebitFamilies(families);
+    setLinkageAnalyzed(true);
+    setLinkageExpanded(true);
+
+    const validCount = families.filter(f => f.isValid).length;
+    const invalidCount = families.filter(f => !f.isValid).length;
+
+    toast({
+      title: "✅ Debit Linkage Analysis Complete",
+      description: `Found ${families.length} families: ${validCount} valid, ${invalidCount} invalid`,
+      duration: 5000
+    });
+  };
+
+  // Remove Invalid Debit Families
+  const removeInvalidDebitFamilies = () => {
+    if (debitFamilies.length === 0) {
+      toast({ title: "No Analysis", description: "Please run Debit Linkage Analysis first" });
+      return;
+    }
+
+    setLastSnapshot(JSON.parse(JSON.stringify(data)));
+
+    const invalidFamilies = debitFamilies.filter(f => !f.isValid);
+    const rowsToRemove = new Set<number>();
+
+    invalidFamilies.forEach(family => {
+      family.entries.forEach(entry => {
+        rowsToRemove.add(entry.rowIndex);
+      });
+    });
+
+    const headers = data[0];
+    const newData = [headers];
+    let removed = 0;
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const isGrandTotal = isGrandTotalRow(row);
+
+      if (isGrandTotal) {
+        newData.push(row);
+        continue;
+      }
+
+      if (rowsToRemove.has(i)) {
+        removed++;
+      } else {
+        newData.push(row);
+      }
+    }
+
+    const withRecalculatedTotals = recalculateGroupTotals(newData);
+    const compressed = compressSeparatorRows(withRecalculatedTotals);
+
+    const stats = calculateRemainingStatistics(compressed);
+
+    setData(compressed);
+    setRemovedCount(removedCount + removed);
+    setRemainingRows(stats.remainingRows);
+    setTotalArrears(stats.totalArrears);
+
+    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
+
+    // Clear analysis to force re-analysis
+    setDebitFamilies([]);
+    setLinkageAnalyzed(false);
+
+    toast({
+      title: '🧹 Invalid Families Removed',
+      description: `Removed ${removed} row(s) from ${invalidFamilies.length} invalid families. Re-run analysis to verify.`,
+      duration: 5000
+    });
+  };
+
   const formatCurrency = (value: number | string) => {
     const numValue = typeof value === 'string' ? parseFloat(value.replace(/,/g, '')) : value;
     if (isNaN(numValue)) return '0.00';
@@ -1336,7 +1613,7 @@ export default function Stage4() {
             Case Type Based Removal
           </CardTitle>
           <CardDescription>
-            Select which case types to keep or remove (Debit Linkage Validation)
+            Select which case types to keep or remove
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1374,6 +1651,122 @@ export default function Stage4() {
               </Button>
             </CollapsibleContent>
           </Collapsible>
+        </CardContent>
+      </Card>
+
+      {/* Debit Linkage Validation Module */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center">
+            <CheckCircle2 className="h-5 w-5 mr-2" />
+            Debit Linkage Validation System
+          </CardTitle>
+          <CardDescription>
+            Validate transaction families based on debit number linkage and case type dependencies
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Alert>
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              <strong>Validation Logic:</strong>
+              <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
+                <li><strong>Core Liabilities:</strong> Final Original, Provisional Original, Additional Assessment, Audit</li>
+                <li><strong>Valid Family:</strong> Must contain at least one core liability entry</li>
+                <li><strong>Invalid (Remove):</strong> Orphaned settlements, standalone penalties, missing core liabilities</li>
+                <li><strong>Grouping:</strong> By Debit No + Tax Type + Payroll Year + Period</li>
+              </ul>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Entries without valid debit numbers are excluded from this analysis.
+              </p>
+            </AlertDescription>
+          </Alert>
+
+          <div className="flex gap-2">
+            <Button onClick={analyzeDebitLinkage} variant="default">
+              <CheckCircle2 className="mr-2 h-4 w-4" />
+              Analyze Debit Linkage
+            </Button>
+            <Button 
+              onClick={removeInvalidDebitFamilies} 
+              variant="destructive"
+              disabled={!linkageAnalyzed || debitFamilies.filter(f => !f.isValid).length === 0}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Remove Invalid Families
+            </Button>
+          </div>
+
+          {linkageAnalyzed && (
+            <div className="mt-4 p-4 bg-muted rounded-lg">
+              <div className="grid grid-cols-3 gap-4 text-center mb-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Total Families</p>
+                  <p className="text-2xl font-bold">{debitFamilies.length}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Valid Families</p>
+                  <p className="text-2xl font-bold text-success">{debitFamilies.filter(f => f.isValid).length}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Invalid Families</p>
+                  <p className="text-2xl font-bold text-destructive">{debitFamilies.filter(f => !f.isValid).length}</p>
+                </div>
+              </div>
+
+              <Collapsible open={linkageExpanded} onOpenChange={setLinkageExpanded}>
+                <CollapsibleTrigger asChild>
+                  <Button variant="outline" className="w-full">
+                    {linkageExpanded ? 'Hide' : 'Show'} Family Details
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-4 space-y-3 max-h-[400px] overflow-y-auto">
+                  {debitFamilies.map((family, idx) => (
+                    <div 
+                      key={idx} 
+                      className={`p-3 rounded-lg border-2 ${
+                        family.isValid 
+                          ? 'border-success bg-success/5' 
+                          : 'border-destructive bg-destructive/5'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <div className="font-semibold text-sm">
+                            Debit No: {family.debitNo}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {family.taxType} | Year: {family.payrollYear} | Period: {family.period || 'N/A'}
+                          </div>
+                        </div>
+                        <Badge variant={family.isValid ? 'default' : 'destructive'}>
+                          {family.suggestion}
+                        </Badge>
+                      </div>
+                      
+                      <div className="text-xs mb-2 text-muted-foreground">
+                        {family.reason}
+                      </div>
+
+                      <div className="space-y-1">
+                        {family.entries.map((entry, entryIdx) => (
+                          <div key={entryIdx} className="flex items-center gap-2 text-xs p-2 bg-background rounded">
+                            <Badge variant="outline" className="text-xs">
+                              {entry.category}
+                            </Badge>
+                            <span className="flex-1">{entry.caseType}</span>
+                            <span className="text-muted-foreground">
+                              D: {formatCurrency(entry.debitAmount)} | C: {formatCurrency(entry.creditAmount)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </CollapsibleContent>
+              </Collapsible>
+            </div>
+          )}
         </CardContent>
       </Card>
 
