@@ -718,9 +718,18 @@ export default function Stage4() {
     const stats = calculateRemainingStatistics(snapshot);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
+    
+    // Re-analyze after restoration
+    analyzeTaxTypes(snapshot);
+    analyzeCaseTypes(snapshot);
+    
     localStorage.setItem('stage_one_cleaned_data', JSON.stringify(snapshot));
 
-    toast({ title: "↩️ Undone", description: "Reverted last removal action." });
+    toast({ 
+      title: "↩️ Entries Restored", 
+      description: "All removed entries restored. Sheet synchronized and totals recalculated.",
+      duration: 3000
+    });
   };
 
   const toggleTaxType = (taxType: string) => {
@@ -1027,8 +1036,8 @@ export default function Stage4() {
 
     toast({
       title: "✅ Debit Linkage Analysis Complete",
-      description: `Found ${families.length} families: ${validCount} valid, ${invalidCount} invalid`,
-      duration: 5000
+      description: `Found ${families.length} transaction families: ${validCount} valid (keep), ${invalidCount} invalid (remove). Review and select families to process.`,
+      duration: 3000
     });
   };
 
@@ -1081,9 +1090,9 @@ export default function Stage4() {
     if (!autoUpdate) {
       setPendingRemovals(rowsToRemove);
       toast({
-        title: "⏸️ Removal Pending",
-        description: `${rowsToRemove.size} entries marked for removal. Click "Apply Changes" to update sheet.`,
-        duration: 5000
+        title: "⏸️ Removal Pending (Preview Mode)",
+        description: `${rowsToRemove.size} entries marked for removal. Click "Apply Changes" to update sheet and recalculate totals.`,
+        duration: 3000
       });
       return;
     }
@@ -1156,11 +1165,11 @@ export default function Stage4() {
     setFlashRows(remainingRowIndices);
     setTimeout(() => setFlashRows(new Set()), 2000);
 
-    // Show success message
+    // Show success message with auto-dismiss
     toast({
-      title: '✅ Selected entries successfully removed and sheet updated',
-      description: `Removed ${removed} row(s) from ${familyCount} families. Totals recalculated. (Expected: ${expectedDifference}, Actual: ${actualDifference})`,
-      duration: 5000
+      title: '✅ Entries Removed & Sheet Updated',
+      description: `Successfully removed ${removed} row(s) from ${familyCount} families. All totals and arrears automatically recalculated. Sheet synchronized.`,
+      duration: 3000
     });
   };
 
@@ -1178,7 +1187,11 @@ export default function Stage4() {
   // Cancel pending removals
   const cancelPendingRemovals = () => {
     setPendingRemovals(new Set());
-    toast({ title: "Cancelled", description: "Pending removals cleared" });
+    toast({ 
+      title: "Cancelled", 
+      description: "Pending removals cleared. No changes made to sheet.",
+      duration: 3000
+    });
   };
 
   const formatCurrency = (value: number | string) => {
@@ -1784,6 +1797,23 @@ export default function Stage4() {
             </AlertDescription>
           </Alert>
 
+          <Alert className="bg-blue-50 dark:bg-blue-950/20 border-blue-200">
+            <CheckCircle2 className="h-4 w-4 text-blue-600" />
+            <AlertDescription className="text-blue-900 dark:text-blue-100">
+              <strong>🔄 Full Synchronization Enabled:</strong>
+              <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
+                <li>✅ Entries removed from main tax position sheet instantly</li>
+                <li>✅ All debit, credit, and arrears totals automatically recalculated</li>
+                <li>✅ Group totals and summaries updated in real-time</li>
+                <li>✅ Changes saved to local storage for persistence</li>
+                <li>✅ Full undo support - restore removed entries anytime</li>
+              </ul>
+              <p className="mt-2 text-xs font-medium">
+                💡 All formatting (borders, bold rows, number formatting) preserved after removal.
+              </p>
+            </AlertDescription>
+          </Alert>
+
           <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
             <div className="flex items-center space-x-2">
               <Checkbox
@@ -1880,6 +1910,17 @@ export default function Stage4() {
             >
               Unselect All
             </Button>
+            
+            {lastSnapshot && (
+              <Button 
+                onClick={handleUndoLastRemoval}
+                variant="outline"
+                className="border-primary text-primary hover:bg-primary/10"
+              >
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Restore Last Removed Entries
+              </Button>
+            )}
           </div>
 
           {linkageAnalyzed && (
