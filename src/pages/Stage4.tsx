@@ -181,6 +181,15 @@ export default function Stage4() {
     return row[taxTypeIndex]?.toString().toUpperCase().includes("TOTAL");
   };
 
+  // Detect GRAND TOTAL rows regardless of which column contains the label
+  const isGrandTotalRow = (row: any[]): boolean => {
+    return row.some(cell => {
+      if (cell === null || cell === undefined) return false;
+      const txt = String(cell).toUpperCase();
+      return (txt.includes('GRAND') && txt.includes('TOTAL')) || txt.includes('GRAND TOTAL');
+    });
+  };
+
   const calculateInitialStatistics = (dataArray: any[]) => {
     if (dataArray.length === 0) return { totalRows: 0, totalArrears: 0 };
     
@@ -370,7 +379,7 @@ export default function Stage4() {
     const dataRows: Array<{ idx: number; row: any[] }> = [];
     for (let i = 1; i < recalculatedData.length; i++) {
       const row = recalculatedData[i];
-      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
+      const isGrandTotal = isGrandTotalRow(row);
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = debitIndex !== -1 && row[debitIndex] !== undefined && row[debitIndex] !== null && String(row[debitIndex]).trim() !== '';
       const creditPresent = creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== null && String(row[creditIndex]).trim() !== '';
@@ -503,7 +512,7 @@ export default function Stage4() {
 
     for (let i = 1; i < recalculatedData.length; i++) {
       const row = recalculatedData[i];
-      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
+      const isGrandTotal = isGrandTotalRow(row);
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = debitIndex !== -1 && row[debitIndex] !== undefined && row[debitIndex] !== null && String(row[debitIndex]).trim() !== '';
       const creditPresent = creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== null && String(row[creditIndex]).trim() !== '';
@@ -553,48 +562,138 @@ export default function Stage4() {
       toast({ title: "No Data", description: "Please import data first", variant: "destructive" });
       return;
     }
+
     const recalculated = recalculateArrears(data);
     const headers = recalculated[0] as string[];
+
     const arrearsIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'arrears');
     const debitIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount');
     const creditIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount');
+    const debitNoIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit no');
+    const taxTypeIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'tax type');
+    const payrollYearIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'payroll year');
+    const caseTypeIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'case type');
+    const valueDateIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'value date');
+
     if (debitIdx === -1 || creditIdx === -1) {
       toast({ title: "Columns Not Found", description: "Required columns missing", variant: "destructive" });
       return;
     }
+
+    // Build list of candidate rows (skip totals, separators, GRAND TOTAL)
+    const candidates: Array<{ idx: number; row: any[] }> = [];
+    for (let i = 1; i < recalculated.length; i++) {
+      const row = recalculated[i];
+      const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
+      const debitPresent = row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
+      const creditPresent = row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
+      const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotalRow(row)) continue;
+      candidates.push({ idx: i, row });
+    }
+
+    const rowsToRemove = new Set<number>();
+
+    // A) Per-row zero arrears or both amounts zero
+    for (const { idx, row } of candidates) {
+      const d = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
+      const c = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
+      const a = arrearsIdx !== -1 ? (parseFloat(String(row[arrearsIdx] || 0).replace(/,/g, '')) || 0) : (d - c);
+      if (Math.abs(a) < 0.01 || (Math.abs(d) < 0.01 && Math.abs(c) < 0.01)) rowsToRemove.add(idx);
+    }
+
+    // B) Full offset by Debit Number (sum Debit == sum Credit for same Debit No)
+    const byDebitNo = new Map<string, number[]>();
+    for (const { idx, row } of candidates) {
+      const dn = debitNoIdx !== -1 ? String(row[debitNoIdx] || '').trim() : '';
+      if (!dn || dn === '–' || dn === '-') continue;
+      if (!byDebitNo.has(dn)) byDebitNo.set(dn, []);
+      byDebitNo.get(dn)!.push(idx);
+    }
+    for (const idxs of byDebitNo.values()) {
+      let sumD = 0, sumC = 0;
+      for (const i of idxs) {
+        const r = recalculated[i];
+        sumD += parseFloat(String(r[debitIdx] || 0).replace(/,/g, '')) || 0;
+        sumC += parseFloat(String(r[creditIdx] || 0).replace(/,/g, '')) || 0;
+      }
+      if (Math.abs(sumD - sumC) < 0.01 && Math.max(sumD, sumC) > 0) idxs.forEach(i => rowsToRemove.add(i));
+    }
+
+    // C) Implicit match (at least one missing Debit No) within ±31 days and same Tax/Year/Case
+    for (let i = 0; i < candidates.length; i++) {
+      if (rowsToRemove.has(candidates[i].idx)) continue;
+      const r1 = candidates[i].row;
+      const dn1 = debitNoIdx !== -1 ? String(r1[debitNoIdx] || '').trim() : '';
+      const missing1 = !dn1 || dn1 === '–' || dn1 === '-';
+      if (!missing1) continue;
+
+      const d1 = parseFloat(String(r1[debitIdx] || 0).replace(/,/g, '')) || 0;
+      const c1 = parseFloat(String(r1[creditIdx] || 0).replace(/,/g, '')) || 0;
+
+      for (let j = i + 1; j < candidates.length; j++) {
+        if (rowsToRemove.has(candidates[j].idx)) continue;
+        const r2 = candidates[j].row;
+        const dn2 = debitNoIdx !== -1 ? String(r2[debitNoIdx] || '').trim() : '';
+        const missing2 = !dn2 || dn2 === '–' || dn2 === '-';
+        if (!missing1 && !missing2) continue;
+
+        const d2 = parseFloat(String(r2[debitIdx] || 0).replace(/,/g, '')) || 0;
+        const c2 = parseFloat(String(r2[creditIdx] || 0).replace(/,/g, '')) || 0;
+
+        const totalsOffset = Math.abs((d1 + d2) - (c1 + c2)) < 0.01 && Math.abs(d1 + d2) > 0.01;
+        if (totalsOffset) {
+          const tt1 = taxTypeIdx !== -1 ? String(r1[taxTypeIdx] || '').trim().toLowerCase() : '';
+          const tt2 = taxTypeIdx !== -1 ? String(r2[taxTypeIdx] || '').trim().toLowerCase() : '';
+          const py1 = payrollYearIdx !== -1 ? String(r1[payrollYearIdx] || '').trim() : '';
+          const py2 = payrollYearIdx !== -1 ? String(r2[payrollYearIdx] || '').trim() : '';
+          const ct1 = caseTypeIdx !== -1 ? String(r1[caseTypeIdx] || '').trim().toLowerCase() : '';
+          const ct2 = caseTypeIdx !== -1 ? String(r2[caseTypeIdx] || '').trim().toLowerCase() : '';
+          const vd1 = valueDateIdx !== -1 ? String(r1[valueDateIdx] || '').trim() : '';
+          const vd2 = valueDateIdx !== -1 ? String(r2[valueDateIdx] || '').trim() : '';
+          const dateMatch = daysDifference(vd1, vd2) <= 31;
+          if (tt1 === tt2 && py1 === py2 && ct1 === ct2 && dateMatch) {
+            rowsToRemove.add(candidates[i].idx);
+            rowsToRemove.add(candidates[j].idx);
+          }
+        }
+      }
+    }
+
+    // Build new data array
     const newData: any[] = [headers];
     let removed = 0;
     for (let i = 1; i < recalculated.length; i++) {
       const row = recalculated[i];
-      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
-      const debitPresent = debitIdx !== -1 && row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
-      const creditPresent = creditIdx !== -1 && row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
+      const debitPresent = row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
+      const creditPresent = row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
       const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
-      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotal) {
+      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotalRow(row)) {
         newData.push(row);
         continue;
       }
-      const debit = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
-      const credit = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
-      const arrears = arrearsIdx !== -1 ? (parseFloat(String(row[arrearsIdx] || 0).replace(/,/g, '')) || 0) : (debit - credit);
-      if (Math.abs(arrears) < 0.01 || Math.abs(debit - credit) < 0.01) {
+      if (rowsToRemove.has(i)) {
         removed++;
       } else {
         newData.push(row);
       }
     }
+
     const withTotals = recalculateGroupTotals(newData);
     const compressed = compressSeparatorRows(withTotals);
     const stats = calculateRemainingStatistics(compressed);
+
     setData(compressed);
     setRemovedCount(removedCount + removed);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
+
     localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
+
     toast({
       title: '🧹 Zero Arrears Removed',
-      description: `Removed ${removed} zero-arrears rows. Group totals recalculated; GRAND TOTAL stays at the bottom.`,
+      description: `Removed ${removed} zero-arrears and offsetting rows. Group totals recalculated; GRAND TOTAL stays at the bottom.`,
       duration: 5000,
     });
   };
@@ -792,7 +891,7 @@ export default function Stage4() {
 
     for (let i = 1; i < dataArray.length; i++) {
       const row = dataArray[i];
-      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
+      const isGrandTotal = isGrandTotalRow(row);
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
       const creditPresent = row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
@@ -903,7 +1002,7 @@ export default function Stage4() {
 
     for (let i = 1; i < dataArray.length; i++) {
       const row = dataArray[i];
-      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
+      const isGrandTotal = isGrandTotalRow(row);
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = debitIdx !== -1 && row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
       const creditPresent = creditIdx !== -1 && row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
@@ -990,7 +1089,7 @@ export default function Stage4() {
                 let lastWasTotalSep = false;
 
                 for (const row of rows) {
-                  const isGrandTotal = row[0]?.toString().toUpperCase().includes("GRAND");
+                  const isGrandTotal = isGrandTotalRow(row);
                   const totalLabelRow = isTotalRow(row);
                   const nonNumericEmpty = isNonNumericEmpty(row);
                   const debitPresent = hasDebit(row);
@@ -1024,7 +1123,7 @@ export default function Stage4() {
                 }
 
                 return filteredRows.map((row: any[], rowIdx: number) => {
-                  const isGrandTotal = row[0]?.toString().toUpperCase().includes("GRAND");
+                  const isGrandTotal = isGrandTotalRow(row);
                   const isTotal = isTotalRow(row);
 
                   const nonNumericEmpty = isNonNumericEmpty(row);
