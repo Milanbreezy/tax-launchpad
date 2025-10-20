@@ -2,13 +2,14 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowRight, ArrowLeft, Trash2, RotateCcw, AlertCircle, CheckCircle2, Filter } from "lucide-react";
+import { ArrowRight, ArrowLeft, Trash2, RotateCcw, AlertCircle, CheckCircle2, Filter, Eye, ChevronDown } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 
 interface TaxTypeSummary {
@@ -2038,6 +2039,168 @@ export default function Stage4() {
             >
               Unselect All
             </Button>
+
+            {linkageAnalyzed && (
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" className="border-primary text-primary hover:bg-primary/10">
+                    <Eye className="mr-2 h-4 w-4" />
+                    View All Entries Details
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-7xl max-h-[90vh] overflow-hidden flex flex-col">
+                  <DialogHeader>
+                    <DialogTitle>Debit Linkage Validation - Complete Entry Details</DialogTitle>
+                    <DialogDescription>
+                      Review all entries categorized by validation status (expand/collapse sections to view)
+                    </DialogDescription>
+                  </DialogHeader>
+                  
+                  <ScrollArea className="flex-1 pr-4">
+                    <div className="space-y-6">
+                      {/* Valid Entries Section */}
+                      <Collapsible defaultOpen className="border-2 border-success rounded-lg">
+                        <div className="bg-success/10 p-4">
+                          <CollapsibleTrigger className="flex items-center justify-between w-full group">
+                            <h4 className="font-semibold text-success flex items-center gap-2 text-lg">
+                              <CheckCircle2 className="h-5 w-5" />
+                              ✅ Valid Linked Entries - TO KEEP ({debitFamilies.filter(f => f.isValid).reduce((sum, f) => sum + f.entries.length, 0)} entries in {debitFamilies.filter(f => f.isValid).length} families)
+                            </h4>
+                            <ChevronDown className="h-5 w-5 transition-transform group-data-[state=open]:rotate-180" />
+                          </CollapsibleTrigger>
+                        </div>
+                        <CollapsibleContent className="p-4">
+                          <div className="space-y-4">
+                            {debitFamilies.filter(f => f.isValid).map((family, familyIdx) => (
+                              <div key={familyIdx} className="border rounded-lg p-3 bg-background">
+                                <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-950/20 rounded">
+                                  <div className="font-semibold text-blue-700 dark:text-blue-300">
+                                    Family {familyIdx + 1}: Debit No. {family.debitNo}
+                                  </div>
+                                  <div className="text-sm text-blue-600 dark:text-blue-400">
+                                    {family.taxType} | Payroll Year: {family.payrollYear} | Period: {family.period || 'N/A'}
+                                  </div>
+                                  <div className="text-xs italic mt-1 text-muted-foreground">
+                                    {family.reason}
+                                  </div>
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-sm border-collapse">
+                                    <thead className="bg-muted">
+                                      <tr>
+                                        <th className="border p-2 text-left font-semibold">Category</th>
+                                        <th className="border p-2 text-left font-semibold">Case Type</th>
+                                        <th className="border p-2 text-left font-semibold">Value Date</th>
+                                        <th className="border p-2 text-left font-semibold">Period</th>
+                                        <th className="border p-2 text-left font-semibold">Year Payment</th>
+                                        <th className="border p-2 text-right font-semibold">Debit</th>
+                                        <th className="border p-2 text-right font-semibold">Credit</th>
+                                        <th className="border p-2 text-right font-semibold">Arrears</th>
+                                        <th className="border p-2 text-left font-semibold">Last Event</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {family.entries.map((entry, entryIdx) => (
+                                        <tr key={entryIdx} className="hover:bg-muted/50">
+                                          <td className="border p-2">
+                                            <Badge variant="outline" className="text-xs">{entry.category}</Badge>
+                                          </td>
+                                          <td className="border p-2">{entry.caseType}</td>
+                                          <td className="border p-2">{entry.valueDate}</td>
+                                          <td className="border p-2">{entry.period}</td>
+                                          <td className="border p-2">{entry.yearOfPayment}</td>
+                                          <td className="border p-2 text-right tabular-nums">{formatCurrency(entry.debitAmount)}</td>
+                                          <td className="border p-2 text-right tabular-nums">{formatCurrency(entry.creditAmount)}</td>
+                                          <td className="border p-2 text-right tabular-nums font-semibold">{formatCurrency(entry.arrears)}</td>
+                                          <td className="border p-2 text-xs">{entry.lastEvent}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+
+                      {/* Orphaned/Invalid Entries Section */}
+                      <Collapsible defaultOpen className="border-2 border-destructive rounded-lg">
+                        <div className="bg-destructive/10 p-4">
+                          <CollapsibleTrigger className="flex items-center justify-between w-full group">
+                            <h4 className="font-semibold text-destructive flex items-center gap-2 text-lg">
+                              <AlertCircle className="h-5 w-5" />
+                              ❌ Orphaned/Invalid Entries - TO REMOVE ({debitFamilies.filter(f => !f.isValid).reduce((sum, f) => sum + f.entries.length, 0)} entries in {debitFamilies.filter(f => !f.isValid).length} families)
+                            </h4>
+                            <ChevronDown className="h-5 w-5 transition-transform group-data-[state=open]:rotate-180" />
+                          </CollapsibleTrigger>
+                        </div>
+                        <CollapsibleContent className="p-4">
+                          <div className="space-y-4">
+                            {debitFamilies.filter(f => !f.isValid).map((family, familyIdx) => (
+                              <div key={familyIdx} className={`border rounded-lg p-3 ${family.isOrphaned ? 'border-destructive bg-destructive/5' : 'bg-background'}`}>
+                                <div className="mb-3 p-2 bg-red-50 dark:bg-red-950/20 rounded">
+                                  <div className="font-semibold text-red-700 dark:text-red-300 flex items-center gap-2">
+                                    {family.isOrphaned ? (
+                                      <>
+                                        <Badge variant="destructive" className="text-xs">⚠️ ORPHANED CREDIT</Badge>
+                                        <span>NO DEBIT NUMBER</span>
+                                      </>
+                                    ) : (
+                                      <>Family {familyIdx + 1}: Debit No. {family.debitNo}</>
+                                    )}
+                                  </div>
+                                  <div className="text-sm text-red-600 dark:text-red-400">
+                                    {family.taxType} | Payroll Year: {family.payrollYear} | Period: {family.period || 'N/A'}
+                                  </div>
+                                  <div className="text-xs italic mt-1 font-medium text-destructive">
+                                    ⚠️ {family.reason}
+                                  </div>
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-sm border-collapse">
+                                    <thead className="bg-muted">
+                                      <tr>
+                                        <th className="border p-2 text-left font-semibold">Category</th>
+                                        <th className="border p-2 text-left font-semibold">Case Type</th>
+                                        <th className="border p-2 text-left font-semibold">Value Date</th>
+                                        <th className="border p-2 text-left font-semibold">Period</th>
+                                        <th className="border p-2 text-left font-semibold">Year Payment</th>
+                                        <th className="border p-2 text-right font-semibold">Debit</th>
+                                        <th className="border p-2 text-right font-semibold">Credit</th>
+                                        <th className="border p-2 text-right font-semibold">Arrears</th>
+                                        <th className="border p-2 text-left font-semibold">Last Event</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {family.entries.map((entry, entryIdx) => (
+                                        <tr key={entryIdx} className="hover:bg-muted/50">
+                                          <td className="border p-2">
+                                            <Badge variant="outline" className="text-xs">{entry.category}</Badge>
+                                          </td>
+                                          <td className="border p-2">{entry.caseType}</td>
+                                          <td className="border p-2">{entry.valueDate}</td>
+                                          <td className="border p-2">{entry.period}</td>
+                                          <td className="border p-2">{entry.yearOfPayment}</td>
+                                          <td className="border p-2 text-right tabular-nums">{formatCurrency(entry.debitAmount)}</td>
+                                          <td className="border p-2 text-right tabular-nums">{formatCurrency(entry.creditAmount)}</td>
+                                          <td className="border p-2 text-right tabular-nums font-semibold">{formatCurrency(entry.arrears)}</td>
+                                          <td className="border p-2 text-xs">{entry.lastEvent}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </div>
+                  </ScrollArea>
+                </DialogContent>
+              </Dialog>
+            )}
             
             {lastSnapshot && (
               <Button 
