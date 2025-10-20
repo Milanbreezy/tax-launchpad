@@ -44,7 +44,7 @@ export default function Stage4() {
   const [caseTypes, setCaseTypes] = useState<CaseTypeSummary[]>([]);
   const [taxTypeExpanded, setTaxTypeExpanded] = useState(false);
   const [caseTypeExpanded, setCaseTypeExpanded] = useState(false);
-
+  const [lastSnapshot, setLastSnapshot] = useState<any[] | null>(null);
   useEffect(() => {
     loadData();
   }, []);
@@ -538,73 +538,100 @@ export default function Stage4() {
     });
   };
 
-  // Remove ALL Zero Arrears rows (strengthened version)
+  // Remove ALL Zero/Balanced entries and zero-total groups (strict equality with tolerance)
   const handleRemoveAllZeroArrears = () => {
     if (data.length === 0) {
       toast({ title: "No Data", description: "Please import data first", variant: "destructive" });
       return;
     }
 
+    // Snapshot for undo
+    setLastSnapshot(JSON.parse(JSON.stringify(data)));
+
     const headers = data[0] as string[];
     const debitIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount');
     const creditIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount');
+    const taxTypeIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'tax type');
+    const payrollYearIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'payroll year');
 
-    if (debitIdx === -1 || creditIdx === -1) {
+    if (debitIdx === -1 || creditIdx === -1 || taxTypeIdx === -1 || payrollYearIdx === -1) {
       toast({ title: "Columns Not Found", description: "Required columns missing", variant: "destructive" });
       return;
     }
 
-    // Build list of candidate data rows (skip totals, separators, GRAND TOTAL, headers)
-    const rowsToRemove = new Set<number>();
-    
+    const TOL = 0.01;
+
+    const grandTotalRows: any[] = [];
+    const dataRows: any[] = [];
+
+    // Collect data rows only, preserve any GRAND TOTAL rows to re-append later
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      
-      // Skip structural rows (totals, separators, GRAND TOTAL)
+      if (isGrandTotalRow(row)) { grandTotalRows.push(row); continue; }
+
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
       const creditPresent = row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
       const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
-      
-      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotalRow(row)) {
+
+      // Skip structural rows (headers, labeled totals, separators, blanks)
+      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || nonNumericEmpty) {
         continue;
       }
-      
-      // Parse debit and credit amounts with tolerance
-      const debit = parseFloat(String(row[debitIdx] || 0).replace(/,/g, '')) || 0;
-      const credit = parseFloat(String(row[creditIdx] || 0).replace(/,/g, '')) || 0;
-      const arrears = debit - credit;
-      
-      // Remove if: (Debit = Credit) OR (both Debit and Credit are zero)
-      // Using ±0.01 tolerance for floating point comparison
-      const isBalanced = Math.abs(arrears) < 0.01;
-      const bothZero = Math.abs(debit) < 0.01 && Math.abs(credit) < 0.01;
-      
-      if (isBalanced || bothZero) {
-        rowsToRemove.add(i);
-      }
+
+      dataRows.push(row);
     }
 
-    // Build new data array excluding removed rows
-    const newData: any[] = [headers];
+    // Group data rows by Tax Type + Payroll Year
+    const groups = new Map<string, any[]>();
+    for (const row of dataRows) {
+      const key = `${String(row[taxTypeIdx] || '').trim()}||${String(row[payrollYearIdx] || '').trim()}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(row);
+    }
+
+    const includedRows: any[] = [];
     let removed = 0;
-    
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-      
-      if (rowsToRemove.has(i)) {
-        removed++;
-      } else {
-        newData.push(row);
+
+    const parseNum = (v: any) => {
+      const n = parseFloat(String(v ?? 0).replace(/,/g, ''));
+      return isNaN(n) ? 0 : n;
+    };
+
+    for (const [, rows] of groups.entries()) {
+      // First, remove individually balanced rows (|debit - credit| <= TOL)
+      const unbalancedRows = rows.filter((r) => {
+        const d = parseNum(r[debitIdx]);
+        const c = parseNum(r[creditIdx]);
+        const balanced = Math.abs(d - c) <= TOL;
+        if (balanced) removed += 1;
+        return !balanced;
+      });
+
+      if (unbalancedRows.length === 0) {
+        // Entire group consisted of balanced rows → group removed implicitly
+        continue;
       }
+
+      // Then, if remaining rows in the group sum to zero, remove the whole group
+      const sumDebit = unbalancedRows.reduce((s, r) => s + parseNum(r[debitIdx]), 0);
+      const sumCredit = unbalancedRows.reduce((s, r) => s + parseNum(r[creditIdx]), 0);
+      if (Math.abs(sumDebit - sumCredit) <= TOL) {
+        removed += unbalancedRows.length; // remove the rest of the group
+        continue; // skip adding these rows
+      }
+
+      // Keep this group's remaining rows
+      includedRows.push(...unbalancedRows);
     }
 
-    // Recalculate group totals with arrears ONLY on total rows
-    const withTotals = recalculateGroupTotals(newData);
-    
-    // Compress to exactly two separator rows per group
+    // Rebuild data with kept rows + original GRAND TOTAL rows; totals/separators will be regenerated
+    const rebuilt: any[] = [headers, ...includedRows, ...grandTotalRows];
+
+    // Recalculate group totals with arrears ONLY on total rows and normalize separators
+    const withTotals = recalculateGroupTotals(rebuilt);
     const compressed = compressSeparatorRows(withTotals);
-    
+
     // Update statistics
     const stats = calculateRemainingStatistics(compressed);
 
@@ -616,12 +643,11 @@ export default function Stage4() {
     localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
 
     toast({
-      title: '🧹 Zero Arrears Removed',
-      description: `Removed ${removed} zero-arrears rows (balanced or empty entries). Group totals recalculated. GRAND TOTAL at bottom.`,
+      title: '🧹 Zero/Balanced Entries Removed',
+      description: `Removed ${removed} row(s). Balanced rows and zero-total groups deleted. Totals recalculated; GRAND TOTAL preserved.`,
       duration: 5000,
     });
   };
-
   const handleRestoreRemoved = () => {
     // Recalculate arrears when restoring
     const recalculatedOriginal = recalculateArrears(originalData);
@@ -645,6 +671,24 @@ export default function Stage4() {
       title: "🔁 Data Restored", 
       description: "All removed rows restored — arrears recalculated" 
     });
+  };
+
+  // Undo last removal (restores snapshot captured before last operation)
+  const handleUndoLastRemoval = () => {
+    if (!lastSnapshot) {
+      toast({ title: "Nothing to Undo", description: "No recent removal to undo." });
+      return;
+    }
+    const snapshot = JSON.parse(JSON.stringify(lastSnapshot));
+    setData(snapshot);
+    setLastSnapshot(null);
+
+    const stats = calculateRemainingStatistics(snapshot);
+    setRemainingRows(stats.remainingRows);
+    setTotalArrears(stats.totalArrears);
+    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(snapshot));
+
+    toast({ title: "↩️ Undone", description: "Reverted last removal action." });
   };
 
   const toggleTaxType = (taxType: string) => {
@@ -1222,6 +1266,9 @@ export default function Stage4() {
             <Button onClick={handleRemoveAllZeroArrears} variant="destructive">
               <CheckCircle2 className="mr-2 h-4 w-4" />
               Remove Zero/Balanced Entries
+            </Button>
+            <Button onClick={handleUndoLastRemoval} variant="secondary" disabled={!lastSnapshot}>
+              ↩️ Undo Last Removal
             </Button>
             <Button onClick={handleRestoreRemoved} variant="outline">
               <RotateCcw className="mr-2 h-4 w-4" />
