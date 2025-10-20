@@ -533,8 +533,13 @@ export default function Stage4() {
       const creditPresent = creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== null && String(row[creditIndex]).trim() !== '';
       const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
 
-      // Always preserve structural rows
-      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotal) {
+      // Skip GRAND TOTAL rows - they will be recalculated fresh
+      if (isGrandTotal) {
+        continue;
+      }
+
+      // Preserve structural rows
+      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow) {
         newData.push(row);
         continue;
       }
@@ -553,16 +558,19 @@ export default function Stage4() {
     const withRecalculatedTotals = recalculateGroupTotals(newData);
     const compressed = compressSeparatorRows(withRecalculatedTotals);
 
-    // Recalculate stats once after removal
-    const stats = calculateRemainingStatistics(compressed);
+    // Recalculate and append GRAND TOTAL based on remaining data
+    const finalData = recalculateGrandTotal(compressed);
 
-    setData(compressed);
+    // Recalculate stats once after removal
+    const stats = calculateRemainingStatistics(finalData);
+
+    setData(finalData);
     setRemovedRowsCache(newRemovedCache);
     setRemovedCount(removedCount + removed);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
 
-    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
+    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(finalData));
 
     toast({
       title: '✅ Offset Entries Removed',
@@ -594,13 +602,12 @@ export default function Stage4() {
 
     const TOL = 0.01;
 
-    const grandTotalRows: any[] = [];
     const dataRows: any[] = [];
 
-    // Collect data rows only, preserve any GRAND TOTAL rows to re-append later
+    // Collect data rows only, skip GRAND TOTAL rows (they will be recalculated)
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      if (isGrandTotalRow(row)) { grandTotalRows.push(row); continue; }
+      if (isGrandTotalRow(row)) { continue; }
 
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
@@ -658,26 +665,29 @@ export default function Stage4() {
       includedRows.push(...unbalancedRows);
     }
 
-    // Rebuild data with kept rows + original GRAND TOTAL rows; totals/separators will be regenerated
-    const rebuilt: any[] = [headers, ...includedRows, ...grandTotalRows];
+    // Rebuild data with kept rows; totals/separators and GRAND TOTAL will be regenerated
+    const rebuilt: any[] = [headers, ...includedRows];
 
     // Recalculate group totals with arrears ONLY on total rows and normalize separators
     const withTotals = recalculateGroupTotals(rebuilt);
     const compressed = compressSeparatorRows(withTotals);
 
-    // Update statistics
-    const stats = calculateRemainingStatistics(compressed);
+    // Recalculate and append GRAND TOTAL based on remaining data
+    const finalData = recalculateGrandTotal(compressed);
 
-    setData(compressed);
+    // Update statistics
+    const stats = calculateRemainingStatistics(finalData);
+
+    setData(finalData);
     setRemovedCount(removedCount + removed);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
 
-    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
+    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(finalData));
 
     toast({
       title: '🧹 Zero/Balanced Entries Removed',
-      description: `Removed ${removed} row(s). Balanced rows and zero-total groups deleted. Totals recalculated; GRAND TOTAL preserved.`,
+      description: `Removed ${removed} row(s). Balanced rows and zero-total groups deleted. Totals and GRAND TOTAL recalculated.`,
       duration: 5000,
     });
   };
