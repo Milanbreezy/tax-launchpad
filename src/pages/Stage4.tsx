@@ -331,21 +331,22 @@ export default function Stage4() {
     for (let i = 1; i < recalculatedData.length; i++) {
       const row = recalculatedData[i];
 
+      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = debitIndex !== -1 && row[debitIndex] !== undefined && row[debitIndex] !== null && String(row[debitIndex]).trim() !== '';
       const creditPresent = creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== null && String(row[creditIndex]).trim() !== '';
       const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
 
-      // Preserve structural rows: blank separators, totals label rows, and totals separator rows
-      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow) {
+      // Preserve structural rows: blank separators, totals label rows, grand total rows, and totals separator rows
+      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow || isGrandTotal) {
         newData.push(row);
         continue;
       }
 
       const arrears = parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
 
-      // Remove any data row where Arrears === 0
-      if (arrears === 0) {
+      // Remove any data row where Arrears is zero (use tolerance for floating-point precision)
+      if (Math.abs(arrears) < 0.01) {
         const rowId = `${i}-${row.join('-')}`;
         newRemovedCache.add(rowId);
         removed++;
@@ -562,17 +563,25 @@ export default function Stage4() {
     }
 
     const result: any[] = [headers];
+    const grandTotalRows: any[] = []; // Store GRAND TOTAL rows separately
     let currentGroup: any[] = [];
     let currentTaxType = '';
     let currentPayrollYear = '';
 
     for (let i = 1; i < dataArray.length; i++) {
       const row = dataArray[i];
+      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
       const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
       const debitPresent = row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
       const creditPresent = row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
       const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
-      const isBlankSeparatorRow = nonNumericEmpty && !debitPresent && !creditPresent && !isTotalRow(row);
+      const isBlankSeparatorRow = nonNumericEmpty && !debitPresent && !creditPresent && !isTotalRow(row) && !isGrandTotal;
+      
+      // Collect GRAND TOTAL rows separately to append at the end
+      if (isGrandTotal) {
+        grandTotalRows.push(row);
+        continue;
+      }
       
       // Check if this is a data row (not empty, not total label)
       const isDataRow = !isEmptyRow(row) && !isTotalRow(row) && !nonNumericEmpty;
@@ -621,8 +630,8 @@ export default function Stage4() {
       } else if (isTotalSeparatorRow || isBlankSeparatorRow) {
         // Skip old separators - we'll regenerate them
         continue;
-      } else {
-        // Keep other special rows (like GRAND TOTAL label rows)
+      } else if (!isGrandTotal) {
+        // Keep other special rows (but not GRAND TOTAL, we handle those separately)
         result.push(row);
       }
     }
@@ -649,6 +658,11 @@ export default function Stage4() {
 
       const blankRow = headers.map(() => '');
       result.push(blankRow);
+    }
+
+    // Append GRAND TOTAL rows at the very end
+    if (grandTotalRows.length > 0) {
+      result.push(...grandTotalRows);
     }
 
     return result;
