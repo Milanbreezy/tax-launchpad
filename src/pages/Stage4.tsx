@@ -369,6 +369,9 @@ export default function Stage4() {
       return;
     }
 
+    // Snapshot for undo
+    setLastSnapshot(JSON.parse(JSON.stringify(data)));
+
     // Recalculate arrears once for accuracy
     const recalculatedData = recalculateArrears(data);
 
@@ -568,19 +571,51 @@ export default function Stage4() {
     // Recalculate stats once after removal
     const stats = calculateRemainingStatistics(finalData);
 
+    // Calculate totals for display
+    const totalDebit = finalData.slice(1).reduce((sum, row) => {
+      if (!isEmptyRow(row) && !isTotalRow(row) && !isGrandTotalRow(row)) {
+        return sum + (parseFloat(String(row[debitIndex] || 0).replace(/,/g, '')) || 0);
+      }
+      return sum;
+    }, 0);
+
+    const totalCredit = finalData.slice(1).reduce((sum, row) => {
+      if (!isEmptyRow(row) && !isTotalRow(row) && !isGrandTotalRow(row)) {
+        return sum + (parseFloat(String(row[creditIndex] || 0).replace(/,/g, '')) || 0);
+      }
+      return sum;
+    }, 0);
+
+    const totalArrear = totalDebit - totalCredit;
+
+    // Update all state
     setData(finalData);
     setRemovedRowsCache(newRemovedCache);
     setRemovedCount(removedCount + removed);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
 
+    // Save to localStorage
     localStorage.setItem('stage_one_cleaned_data', JSON.stringify(finalData));
 
+    // Re-analyze for filters
+    analyzeTaxTypes(finalData);
+    analyzeCaseTypes(finalData);
+
+    // Show detailed success message
     toast({
-      title: '✅ Offset Entries Removed',
-      description: `Removed ${removed} rows using advanced offset detection (Debit No matching, implicit matching, zero entries). Group totals recalculated, two-row separation maintained.`,
-      duration: 5000,
+      title: '✅ Zero Arrear Rows Physically Deleted',
+      description: (
+        <div className="space-y-1">
+          <p className="font-semibold">{removed} rows removed from dataset</p>
+          <p className="text-xs">New Totals: Debit {formatCurrency(totalDebit)}, Credit {formatCurrency(totalCredit)}, Arrear {formatCurrency(totalArrear)}</p>
+          <p className="text-xs">Remaining: {stats.remainingRows} rows | Table updated and saved</p>
+        </div>
+      ),
+      duration: 6000,
     });
+
+    console.log(`✅ Removal complete: ${removed} rows deleted, ${stats.remainingRows} rows remaining`);
   };
 
   // Remove ALL Zero/Balanced entries and zero-total groups (strict equality with tolerance)
@@ -605,6 +640,11 @@ export default function Stage4() {
     }
 
     const TOL = 0.01;
+
+    const parseNumber = (v: any) => {
+      const n = parseFloat(String(v ?? 0).replace(/,/g, ''));
+      return isNaN(n) ? 0 : n;
+    };
 
     const dataRows: any[] = [];
 
@@ -637,16 +677,11 @@ export default function Stage4() {
     const includedRows: any[] = [];
     let removed = 0;
 
-    const parseNum = (v: any) => {
-      const n = parseFloat(String(v ?? 0).replace(/,/g, ''));
-      return isNaN(n) ? 0 : n;
-    };
-
     for (const [, rows] of groups.entries()) {
       // First, remove individually balanced rows (|debit - credit| <= TOL)
       const unbalancedRows = rows.filter((r) => {
-        const d = parseNum(r[debitIdx]);
-        const c = parseNum(r[creditIdx]);
+        const d = parseNumber(r[debitIdx]);
+        const c = parseNumber(r[creditIdx]);
         const balanced = Math.abs(d - c) <= TOL;
         if (balanced) removed += 1;
         return !balanced;
@@ -658,8 +693,8 @@ export default function Stage4() {
       }
 
       // Then, if remaining rows in the group sum to zero, remove the whole group
-      const sumDebit = unbalancedRows.reduce((s, r) => s + parseNum(r[debitIdx]), 0);
-      const sumCredit = unbalancedRows.reduce((s, r) => s + parseNum(r[creditIdx]), 0);
+      const sumDebit = unbalancedRows.reduce((s, r) => s + parseNumber(r[debitIdx]), 0);
+      const sumCredit = unbalancedRows.reduce((s, r) => s + parseNumber(r[creditIdx]), 0);
       if (Math.abs(sumDebit - sumCredit) <= TOL) {
         removed += unbalancedRows.length; // remove the rest of the group
         continue; // skip adding these rows
@@ -682,18 +717,50 @@ export default function Stage4() {
     // Update statistics
     const stats = calculateRemainingStatistics(finalData);
 
+    // Calculate totals for display
+    const totalDebit = finalData.slice(1).reduce((sum, row) => {
+      if (!isEmptyRow(row) && !isTotalRow(row) && !isGrandTotalRow(row)) {
+        return sum + parseNumber(row[debitIdx]);
+      }
+      return sum;
+    }, 0);
+
+    const totalCredit = finalData.slice(1).reduce((sum, row) => {
+      if (!isEmptyRow(row) && !isTotalRow(row) && !isGrandTotalRow(row)) {
+        return sum + parseNumber(row[creditIdx]);
+      }
+      return sum;
+    }, 0);
+
+    const totalArrear = totalDebit - totalCredit;
+
+    // Update all state
     setData(finalData);
     setRemovedCount(removedCount + removed);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
 
+    // Save to localStorage
     localStorage.setItem('stage_one_cleaned_data', JSON.stringify(finalData));
 
+    // Re-analyze for filters
+    analyzeTaxTypes(finalData);
+    analyzeCaseTypes(finalData);
+
+    // Show detailed success message
     toast({
-      title: '🧹 Zero/Balanced Entries Removed',
-      description: `Removed ${removed} row(s). Balanced rows and zero-total groups deleted. Totals and GRAND TOTAL recalculated.`,
-      duration: 5000,
+      title: '🧹 Zero/Balanced Entries Physically Deleted',
+      description: (
+        <div className="space-y-1">
+          <p className="font-semibold">{removed} rows removed from dataset</p>
+          <p className="text-xs">New Totals: Debit {formatCurrency(totalDebit)}, Credit {formatCurrency(totalCredit)}, Arrear {formatCurrency(totalArrear)}</p>
+          <p className="text-xs">Remaining: {stats.remainingRows} rows | Table updated and saved</p>
+        </div>
+      ),
+      duration: 6000,
     });
+
+    console.log(`🧹 Removal complete: ${removed} rows deleted, ${stats.remainingRows} rows remaining`);
   };
   const handleRestoreRemoved = () => {
     // Recalculate arrears when restoring
