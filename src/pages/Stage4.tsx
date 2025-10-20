@@ -57,7 +57,7 @@ export default function Stage4() {
       'Value Date',
       'Period', 
       'Year of Payment',
-      'PayrollYear',
+      'Payroll Year',
       'Tax Type',
       'Case Type',
       'Debit No',
@@ -307,71 +307,71 @@ export default function Stage4() {
       return;
     }
 
-    // First, recalculate arrears to ensure accuracy
+    // Recalculate arrears once for accuracy
     const recalculatedData = recalculateArrears(data);
 
-    const arrearsIndex = findColumnIndex("Arrears");
-    const debitIndex = findColumnIndex("Debit Amount");
-    const creditIndex = findColumnIndex("Credit Amount");
-    
+    const headers = recalculatedData[0] as string[];
+    const arrearsIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'arrears');
+    const debitIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount'.toLowerCase());
+    const creditIndex = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount'.toLowerCase());
+
     if (arrearsIndex === -1 || debitIndex === -1 || creditIndex === -1) {
-      toast({ 
-        title: "Columns Not Found", 
-        description: "Required columns missing", 
-        variant: "destructive" 
+      toast({
+        title: "Columns Not Found",
+        description: "Required columns missing",
+        variant: "destructive",
       });
       return;
     }
 
-    const headers = recalculatedData[0];
-    const newData = [headers];
+    const newData: any[] = [headers];
     const newRemovedCache = new Set(removedRowsCache);
     let removed = 0;
-    
+
     for (let i = 1; i < recalculatedData.length; i++) {
       const row = recalculatedData[i];
-      
-      // Always preserve empty rows and total rows (structural elements)
-      if (isEmptyRow(row) || isTotalRow(row)) {
+
+      const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
+      const debitPresent = debitIndex !== -1 && row[debitIndex] !== undefined && row[debitIndex] !== null && String(row[debitIndex]).trim() !== '';
+      const creditPresent = creditIndex !== -1 && row[creditIndex] !== undefined && row[creditIndex] !== null && String(row[creditIndex]).trim() !== '';
+      const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+
+      // Preserve structural rows: blank separators, totals label rows, and totals separator rows
+      if (isEmptyRow(row) || isTotalRow(row) || isTotalSeparatorRow) {
         newData.push(row);
         continue;
       }
-      
-      // Parse numeric values (use recalculated arrears)
+
       const arrears = parseFloat(String(row[arrearsIndex] || 0).replace(/,/g, "")) || 0;
-      const debit = parseFloat(String(row[debitIndex] || 0).replace(/,/g, "")) || 0;
-      const credit = parseFloat(String(row[creditIndex] || 0).replace(/,/g, "")) || 0;
-      
-      // ONLY remove rows where ALL THREE are zero: Debit = 0 AND Credit = 0 AND Arrears = 0
-      const isZeroArrears = (debit === 0 && credit === 0 && arrears === 0);
-      
-      if (isZeroArrears) {
-        // Create unique ID for this row
+
+      // Remove any data row where Arrears === 0
+      if (arrears === 0) {
         const rowId = `${i}-${row.join('-')}`;
         newRemovedCache.add(rowId);
         removed++;
       } else {
-        // Keep all other rows (including rows with text data, partial zeros, or any non-zero values)
         newData.push(row);
       }
     }
-    
-    setData(newData);
+
+    // Normalize separators to at most two rows (totals row + one blank)
+    const compressed = compressSeparatorRows(newData);
+
+    // Recalculate stats once after removal
+    const stats = calculateRemainingStatistics(compressed);
+
+    setData(compressed);
     setRemovedRowsCache(newRemovedCache);
     setRemovedCount(removedCount + removed);
-    
-    // Recalculate remaining statistics
-    const stats = calculateRemainingStatistics(newData);
     setRemainingRows(stats.remainingRows);
     setTotalArrears(stats.totalArrears);
-    
-    // Save to localStorage
-    localStorage.setItem("stage_one_cleaned_data", JSON.stringify(newData));
-    
-    toast({ 
-      title: "✅ Zero Arrear Entries Removed", 
-      description: `Successfully removed ${removed} zero entries — all other data preserved. Arrears recalculated.`,
-      duration: 4000
+
+    localStorage.setItem('stage_one_cleaned_data', JSON.stringify(compressed));
+
+    toast({
+      title: '✅ Zero Arrear Entries Removed',
+      description: `Removed ${removed} rows with Arrears = 0. Format normalized (max two separators). Totals updated.`,
+      duration: 4000,
     });
   };
 
@@ -525,6 +525,67 @@ export default function Stage4() {
   const isNumericColumn = (columnName: string): boolean => {
     const numericColumns = ['Debit Amount', 'Credit Amount', 'Arrears'];
     return numericColumns.some(col => columnName.toLowerCase().includes(col.toLowerCase()));
+  };
+
+  // Helper to check if non-numeric columns are empty for a row
+  const isNonNumericEmptyRow = (row: any[], headers: string[]): boolean => {
+    return row.every((cell, idx) => {
+      const header = headers[idx];
+      const isNumeric = isNumericColumn(header);
+      if (isNumeric) return true; // ignore numeric cells when checking emptiness
+      return !cell || String(cell).trim() === "";
+    });
+  };
+
+  // Compress separator rows to keep at most two: totals row + one blank row
+  const compressSeparatorRows = (dataArray: any[]): any[] => {
+    if (dataArray.length === 0) return dataArray;
+    const headers = dataArray[0] as string[];
+    const debitIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'debit amount'.toLowerCase());
+    const creditIdx = headers.findIndex(h => h?.toString().toLowerCase().trim() === 'credit amount'.toLowerCase());
+
+    const result: any[] = [headers];
+    let sepRun = 0;
+    let lastWasTotalSep = false;
+
+    for (let i = 1; i < dataArray.length; i++) {
+      const row = dataArray[i];
+      const isGrandTotal = row[0]?.toString().toUpperCase().includes('GRAND');
+      const nonNumericEmpty = isNonNumericEmptyRow(row, headers);
+      const debitPresent = debitIdx !== -1 && row[debitIdx] !== undefined && row[debitIdx] !== null && String(row[debitIdx]).trim() !== '';
+      const creditPresent = creditIdx !== -1 && row[creditIdx] !== undefined && row[creditIdx] !== null && String(row[creditIdx]).trim() !== '';
+      const totalLabelRow = isTotalRow(row);
+
+      const isTotalSeparatorRow = nonNumericEmpty && (debitPresent || creditPresent);
+      const isBlankSeparatorRow = nonNumericEmpty && !debitPresent && !creditPresent && !totalLabelRow && !isGrandTotal;
+
+      if (isTotalSeparatorRow) {
+        // Always keep the first totals separator
+        sepRun = 1;
+        lastWasTotalSep = true;
+        result.push(row);
+      } else if (isBlankSeparatorRow) {
+        if (lastWasTotalSep && sepRun === 1) {
+          // Insert a normalized completely blank row as the second separator
+          const blankRow = headers.map(() => '');
+          result.push(blankRow);
+          sepRun = 2;
+        } else if (!lastWasTotalSep && sepRun < 1) {
+          // Allow a single stray blank if no totals preceded
+          const blankRow = headers.map(() => '');
+          result.push(blankRow);
+          sepRun = 1;
+        }
+        // Else skip extra blanks
+      } else {
+        // Reset streak and push normal data rows and labeled total rows
+        sepRun = 0;
+        lastWasTotalSep = false;
+        result.push(row);
+      }
+    }
+
+    return result;
   };
 
   const renderDataTable = () => {
@@ -765,7 +826,7 @@ export default function Stage4() {
                 <li>If Credit &gt; Debit → Arrear = Negative (Overpayment)</li>
               </ul>
               <p className="mt-2 text-xs text-muted-foreground">
-                <strong>Zero Arrears Removal:</strong> Only removes rows where <strong>Debit = 0 AND Credit = 0 AND Arrears = 0</strong>
+                <strong>Zero Arrears Removal:</strong> Removes all data rows where <strong>Arrears = 0</strong> (offset or empty entries). Structural total/blank separator rows are preserved; formatting stays intact.
               </p>
             </AlertDescription>
           </Alert>
