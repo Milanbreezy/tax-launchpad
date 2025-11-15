@@ -1,7 +1,7 @@
 // Authentication utilities with enhanced security features
 
-const CORRECT_PASSCODE = "PlutoMango@river.88"
-const PASSCODE_VERSION = "v2_PlutoMango@river.88" // Change this whenever passcode changes
+const CORRECT_PASSCODE = "Mangotaxpos@river.88"
+const PASSCODE_VERSION = "v3_Mangotaxpos@river.88" // Change this whenever passcode changes
 const MAX_ATTEMPTS = 3
 const LOCKOUT_DURATION = 5 * 60 * 1000 // 5 minutes in milliseconds
 const INACTIVITY_TIMEOUT = 10 * 60 * 1000 // 10 minutes in milliseconds
