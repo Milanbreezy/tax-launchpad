@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowRight, ArrowLeft, Trash2, RotateCcw, AlertCircle, CheckCircle2, Filter, Eye, ChevronDown } from "lucide-react";
+import { ArrowRight, ArrowLeft, Trash2, RotateCcw, AlertCircle, CheckCircle2, Filter, Eye, ChevronDown, Edit, X, Highlighter } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -81,6 +82,13 @@ export default function Stage4() {
   const [autoUpdate, setAutoUpdate] = useState(true); // Auto-update sheet after removal
   const [pendingRemovals, setPendingRemovals] = useState<Set<number>>(new Set()); // For strikethrough mode
   const [flashRows, setFlashRows] = useState<Set<number>>(new Set()); // For flash highlight
+  
+  // ============= NEW EDIT MODE STATE (COMPLETELY ISOLATED) =============
+  const [editMode, setEditMode] = useState(false);
+  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
+  const [markedRows_v2, setMarkedRows_v2] = useState<Set<number>>(new Set());
+  const [undoBuffer_v2, setUndoBuffer_v2] = useState<Array<{ row: any[], index: number }>>([]);
+  const [toolbarPosition, setToolbarPosition] = useState<{ top: number; left: number } | null>(null);
   
   useEffect(() => {
     loadData();
@@ -1718,6 +1726,241 @@ export default function Stage4() {
     return result;
   };
 
+  // ============= NEW EDIT MODE FUNCTIONS (COMPLETELY ISOLATED) =============
+  
+  const handleDeleteRow_v2 = (rowIndex: number) => {
+    if (data.length === 0) return;
+    
+    const headers = data[0];
+    const actualRowIndex = rowIndex + 1; // +1 because data[0] is headers
+    
+    if (actualRowIndex >= data.length) return;
+    
+    const deletedRow = data[actualRowIndex];
+    
+    // Save to undo buffer
+    setUndoBuffer_v2(prev => [...prev, { row: deletedRow, index: actualRowIndex }]);
+    
+    // Remove the row
+    const newData = [...data];
+    newData.splice(actualRowIndex, 1);
+    setData(newData);
+    
+    // Recalculate totals using new isolated function
+    recalculateTotals_v2(newData);
+    
+    // Save to localStorage
+    localStorage.setItem("stage3Data", JSON.stringify(newData));
+    
+    // Close toolbar
+    setSelectedRowIndex(null);
+    setToolbarPosition(null);
+    
+    toast({
+      title: "Row Deleted",
+      description: "The selected row has been removed. Use Undo to restore it.",
+      duration: 3000
+    });
+  };
+  
+  const handleMarkRow_v2 = (rowIndex: number) => {
+    setMarkedRows_v2(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(rowIndex)) {
+        newSet.delete(rowIndex);
+        toast({
+          title: "Row Unmarked",
+          description: "Highlight removed from row",
+          duration: 2000
+        });
+      } else {
+        newSet.add(rowIndex);
+        toast({
+          title: "Row Marked",
+          description: "Row highlighted for batch deletion",
+          duration: 2000
+        });
+      }
+      return newSet;
+    });
+  };
+  
+  const handleUndo_v2 = () => {
+    if (undoBuffer_v2.length === 0) {
+      toast({
+        title: "Nothing to Undo",
+        description: "No recent deletions in edit mode",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    const lastDeleted = undoBuffer_v2[undoBuffer_v2.length - 1];
+    const newUndoBuffer = undoBuffer_v2.slice(0, -1);
+    setUndoBuffer_v2(newUndoBuffer);
+    
+    // Restore the row
+    const newData = [...data];
+    newData.splice(lastDeleted.index, 0, lastDeleted.row);
+    setData(newData);
+    
+    // Recalculate totals
+    recalculateTotals_v2(newData);
+    
+    // Save to localStorage
+    localStorage.setItem("stage3Data", JSON.stringify(newData));
+    
+    toast({
+      title: "Undo Successful",
+      description: "Last deleted row has been restored",
+      duration: 3000
+    });
+  };
+  
+  const handleDeleteAllMarked = () => {
+    if (markedRows_v2.size === 0) {
+      toast({
+        title: "No Marked Rows",
+        description: "Please mark rows first before batch deletion",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    // Sort indices in reverse to delete from bottom to top (prevents index shifting issues)
+    const sortedIndices = Array.from(markedRows_v2).sort((a, b) => b - a);
+    
+    // Save all to undo buffer
+    const deletedRows: Array<{ row: any[], index: number }> = [];
+    sortedIndices.forEach(rowIndex => {
+      const actualIndex = rowIndex + 1; // +1 because data[0] is headers
+      if (actualIndex < data.length) {
+        deletedRows.push({ row: data[actualIndex], index: actualIndex });
+      }
+    });
+    
+    setUndoBuffer_v2(prev => [...prev, ...deletedRows]);
+    
+    // Remove all marked rows
+    let newData = [...data];
+    sortedIndices.forEach(rowIndex => {
+      const actualIndex = rowIndex + 1;
+      if (actualIndex < newData.length) {
+        newData.splice(actualIndex, 1);
+      }
+    });
+    
+    setData(newData);
+    setMarkedRows_v2(new Set());
+    
+    // Recalculate totals
+    recalculateTotals_v2(newData);
+    
+    // Save to localStorage
+    localStorage.setItem("stage3Data", JSON.stringify(newData));
+    
+    toast({
+      title: "Batch Deletion Complete",
+      description: `${sortedIndices.length} marked rows have been deleted`,
+      duration: 3000
+    });
+  };
+  
+  const recalculateTotals_v2 = (dataArray: any[]) => {
+    if (dataArray.length === 0) return;
+    
+    const headers = dataArray[0];
+    const debitIndex = findColumnIndex("Debit Amount");
+    const creditIndex = findColumnIndex("Credit Amount");
+    const arrearsIndex = findColumnIndex("Arrears");
+    
+    if (debitIndex === -1 || creditIndex === -1) return;
+    
+    let totalDebit = 0;
+    let totalCredit = 0;
+    let totalArrears = 0;
+    
+    // Calculate totals from data rows (skip headers and structural rows)
+    for (let i = 1; i < dataArray.length; i++) {
+      const row = dataArray[i];
+      
+      // Skip empty separator rows and total rows
+      if (isEmptyRow(row) || isTotalRow(row) || isGrandTotalRow(row)) continue;
+      
+      const debit = parseFloat(String(row[debitIndex] || 0).replace(/,/g, '')) || 0;
+      const credit = parseFloat(String(row[creditIndex] || 0).replace(/,/g, '')) || 0;
+      const arrears = debit - credit;
+      
+      totalDebit += debit;
+      totalCredit += credit;
+      totalArrears += arrears;
+    }
+    
+    // Update statistics
+    setTotalArrears(totalArrears);
+    
+    console.log('[Edit Mode v2] Totals recalculated:', {
+      totalDebit: totalDebit.toFixed(2),
+      totalCredit: totalCredit.toFixed(2),
+      totalArrears: totalArrears.toFixed(2)
+    });
+  };
+  
+  const renderFloatingToolbar = () => {
+    if (!editMode || selectedRowIndex === null || toolbarPosition === null) return null;
+    
+    const isMarked = markedRows_v2.has(selectedRowIndex);
+    
+    return (
+      <div
+        className="fixed bg-background border-2 border-primary rounded-lg shadow-2xl p-2 flex items-center gap-2 z-50"
+        style={{
+          top: `${toolbarPosition.top}px`,
+          left: `${toolbarPosition.left}px`,
+        }}
+      >
+        <Button
+          size="sm"
+          variant="destructive"
+          onClick={() => handleDeleteRow_v2(selectedRowIndex)}
+        >
+          <Trash2 className="h-4 w-4 mr-1" />
+          Delete Row
+        </Button>
+        
+        <Button
+          size="sm"
+          variant={isMarked ? "default" : "outline"}
+          onClick={() => handleMarkRow_v2(selectedRowIndex)}
+        >
+          <Highlighter className="h-4 w-4 mr-1" />
+          {isMarked ? "Unmark" : "Mark Row"}
+        </Button>
+        
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={handleUndo_v2}
+          disabled={undoBuffer_v2.length === 0}
+        >
+          <RotateCcw className="h-4 w-4 mr-1" />
+          Undo
+        </Button>
+        
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setSelectedRowIndex(null);
+            setToolbarPosition(null);
+          }}
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+    );
+  };
+
   const renderDataTable = () => {
     if (data.length === 0) return null;
     
@@ -1849,9 +2092,23 @@ export default function Stage4() {
                         ${isGrandTotal ? "bg-green-100 dark:bg-green-950/30 border-t-[3px] border-b-[3px] font-extrabold" : ""}
                         ${isPendingRemoval ? "opacity-50 line-through bg-destructive/10" : ""}
                         ${shouldFlash ? "animate-pulse bg-success/20" : ""}
+                        ${markedRows_v2.has(originalIndex - 1) ? "bg-yellow-100 dark:bg-yellow-900/30" : ""}
+                        ${editMode && !isTotal && !isGrandTotal && !isTotalSeparatorRow && !isSecondSeparatorRow ? "cursor-pointer hover:bg-accent/50" : ""}
                         transition-all duration-300
                       `}
                       style={(isGrandTotal || isTotalSeparatorRow || isTotal) ? { borderColor: 'black' } : {}}
+                      onClick={(e) => {
+                        if (!editMode) return;
+                        if (isTotal || isGrandTotal || isTotalSeparatorRow || isSecondSeparatorRow) return;
+                        
+                        // Calculate toolbar position
+                        const rect = (e.currentTarget as HTMLTableRowElement).getBoundingClientRect();
+                        setToolbarPosition({
+                          top: rect.top - 60,
+                          left: rect.left + 20
+                        });
+                        setSelectedRowIndex(originalIndex - 1); // -1 because originalIndex includes headers
+                      }}
                     >
                       {row.map((cell: any, cellIdx: number) => {
                         const header = headers[cellIdx];
@@ -2746,14 +3003,57 @@ export default function Stage4() {
 
       {/* Data Preview */}
       <Card>
-        <CardHeader>
-          <CardTitle>Data Preview</CardTitle>
-          <CardDescription>
-            Current data after removals and filters
-          </CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+          <div>
+            <CardTitle>Data Preview</CardTitle>
+            <CardDescription>
+              Current data after removals and filters
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <label htmlFor="edit-mode-toggle" className="text-sm font-medium cursor-pointer">
+                Edit Mode
+              </label>
+              <Switch
+                id="edit-mode-toggle"
+                checked={editMode}
+                onCheckedChange={(checked) => {
+                  setEditMode(checked);
+                  setSelectedRowIndex(null);
+                  setToolbarPosition(null);
+                  if (!checked) {
+                    // Exit edit mode
+                    toast({
+                      title: "Edit Mode Disabled",
+                      description: "All inline editing tools are now hidden"
+                    });
+                  } else {
+                    toast({
+                      title: "Edit Mode Enabled",
+                      description: "Click any data row to see inline editing options"
+                    });
+                  }
+                }}
+              />
+            </div>
+            {editMode && markedRows_v2.size > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleDeleteAllMarked}
+              >
+                <Trash2 className="h-4 w-4 mr-1" />
+                Delete All Marked ({markedRows_v2.size})
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
-          {renderDataTable()}
+          <div className="relative">
+            {renderDataTable()}
+            {renderFloatingToolbar()}
+          </div>
         </CardContent>
       </Card>
 
